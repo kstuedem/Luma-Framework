@@ -139,14 +139,11 @@ constexpr bool OneShaderPerPipeline = true;
 #define SKIP_UNSUPPORTED_DEVICE_API(api, ...)                              \
    do {                                                                    \
       if (!IsSupportedGraphicsAPI(api)) {                                  \
-         if constexpr (sizeof(__VA_ARGS__) > 0)                            \
-            return __VA_ARGS__;                                            \
-         else                                                              \
-            return;                                                        \
+         return __VA_OPT__(__VA_ARGS__);                                   \
       }                                                                    \
    } while (0)
 #else
-#define SKIP_UNSUPPORTED_DEVICE_API(api, ...) ((void)0)
+#define SKIP_UNSUPPORTED_DEVICE_API(api, ...) do { (void)0; } while (0)
 #endif
 
 // Depends on "DEVELOPMENT"
@@ -2901,7 +2898,7 @@ namespace
 
    bool OnSetFullscreenState(reshade::api::swapchain* swapchain, bool fullscreen, void* hmonitor)
    {
-      SKIP_UNSUPPORTED_DEVICE_API(swapchain->get_device()->get_api(), false);
+      SKIP_UNSUPPORTED_DEVICE_API(swapchain->get_device()->get_api(), false); // Not exactly needed here...
 
       // Center the window in case it stayed where it was
       if (prevent_fullscreen_state && (fullscreen || force_borderless)) // TODO: test with Mafia 3 and BS2 if actually needed
