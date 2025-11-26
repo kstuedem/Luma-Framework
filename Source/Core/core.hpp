@@ -578,7 +578,7 @@ namespace
 #if DEVELOPMENT
        {"TEST_2X_ZOOM", '0', true, false, "Allows you to zoom in into the film image center to better analyze it", 1},
 #endif
-       {"TEST_SDR_HDR_SPLIT_VIEW_MODE", '0', true, false, "Allows you to clamp to SDR on a portion of the screen, to run quick comparisons between SDR and HDR\n(note that the tonemapper might still run in HDR mode and thus clip further than it would have had in SDR)", 1},
+       {"TEST_SDR_HDR_SPLIT_VIEW_MODE", '0', true, false, "Allows you to clamp to SDR on a portion of the screen, to run quick comparisons between SDR and HDR\n(note that the tonemapper might still run in HDR mode and thus clip further than it would have had in SDR)", 4},
        {"TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL", '0', true, DEVELOPMENT ? false : true, "Tells whether \"TEST_SDR_HDR_SPLIT_VIEW_MODE\" is natively implemented in the game's tonemapper, outputting some SDR and some HDR, or if it's not and we are simply clipping to SDR at the very end", 1},
    };
 
@@ -2479,7 +2479,7 @@ namespace
 
    bool OnCreateSwapchain(reshade::api::device_api api, reshade::api::swapchain_desc& desc, void* hwnd)
    {
-      SKIP_UNSUPPORTED_DEVICE_API(device->get_api(), false);
+      SKIP_UNSUPPORTED_DEVICE_API(api, false);
 
       // There's only one swapchain so it's fine if this is global ("OnInitSwapchain()" will always be called later anyway)
       bool changed = false;
@@ -7491,7 +7491,7 @@ namespace
 
    bool OnUpdateBufferRegion(reshade::api::device* device, const void* data, reshade::api::resource resource, uint64_t offset, uint64_t size)
    {
-      SKIP_UNSUPPORTED_DEVICE_API(cmd_list->get_device()->get_api(), false);
+      SKIP_UNSUPPORTED_DEVICE_API(device->get_api(), false);
       return OnUpdateBufferRegionCommand_Common(device, nullptr, data, resource, offset, size);
    }
 #endif // DEVELOPMENT
@@ -8483,7 +8483,7 @@ namespace
 
    bool OnReShadeSetEffectsState(reshade::api::effect_runtime* runtime, bool enabled)
    {
-      SKIP_UNSUPPORTED_DEVICE_API(runtime->get_device()->get_api());
+      SKIP_UNSUPPORTED_DEVICE_API(runtime->get_device()->get_api(), false);
 
 #if DEVELOPMENT || TEST
       if (reshade_effects_toggle_to_display_mode_toggle)
