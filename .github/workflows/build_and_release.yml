@@ -110,7 +110,6 @@ jobs:
             continue
           }
           # Allow the Generic and Graphics Analyzer mods to be downloaded directly
-          # Allow the Generic and Graphics Analyzer mods to be downloaded directly
           elseif ("${{ matrix.config }}".StartsWith("Development") -and -not (
                    $projectName -like '_Generic' -or
                    $projectName -like 'Generic' -or
@@ -235,7 +234,7 @@ jobs:
         }
 
     - name: Upload ZIP
-      if: (matrix.config == 'Publishing-Release' || matrix.config == 'Test-Release') && steps.create_zip.outputs.skip_upload != 'true'
+      if: (matrix.config == 'Publishing-Release' || matrix.config == 'Test-Release' || matrix.config == 'Development-Release') && steps.create_zip.outputs.skip_upload != 'true'
       uses: actions/upload-artifact@v4
       with:
         name: Package-${{ matrix.config }}-${{ matrix.platform }}
