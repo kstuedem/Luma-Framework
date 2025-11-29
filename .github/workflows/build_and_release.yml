@@ -113,6 +113,8 @@ jobs:
           elseif ("${{ matrix.config }}".StartsWith("Development") -and -not (
                    $projectName -like '_Generic' -or
                    $projectName -like 'Generic' -or
+                   $projectName -like '_Generic Mod' -or
+                   $projectName -like 'Generic Mod' -or
                    $projectName -like 'Graphics Analyzer'
                  )) {
             continue
