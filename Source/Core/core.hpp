@@ -529,12 +529,15 @@ namespace
       { CompileTimeStringHash("Unclip LUT 1D"), { "Luma_UnclipLUT1D", reshade::api::pipeline_subobject_type::compute_shader } },
 #endif
 
+#ifdef ENABLE_SMAA // CB::LumaGameSettings::OutputRes is required! See BioShock Series implementation.
       { CompileTimeStringHash("SMAA Edge Detection VS"), { "Luma_SMAA_impl", reshade::api::pipeline_subobject_type::vertex_shader, nullptr, "smaa_edge_detection_vs" } },
       { CompileTimeStringHash("SMAA Edge Detection PS"), { "Luma_SMAA_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "smaa_edge_detection_ps" } },
       { CompileTimeStringHash("SMAA Blending Weight Calculation VS"), { "Luma_SMAA_impl", reshade::api::pipeline_subobject_type::vertex_shader, nullptr, "smaa_blending_weight_calculation_vs" } },
       { CompileTimeStringHash("SMAA Blending Weight Calculation PS"), { "Luma_SMAA_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "smaa_blending_weight_calculation_ps" } },
       { CompileTimeStringHash("SMAA Neighborhood Blending VS"), { "Luma_SMAA_impl", reshade::api::pipeline_subobject_type::vertex_shader, nullptr, "smaa_neighborhood_blending_vs" } },
       { CompileTimeStringHash("SMAA Neighborhood Blending PS"), { "Luma_SMAA_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "smaa_neighborhood_blending_ps" } },
+#endif
+
    };
 
    // TODO: make the data in these a unique ptr for easier handling, and the shader binary data contained inside of "CachedShader" too.
@@ -2307,14 +2310,18 @@ namespace
       Display::InitNVApi();
 #endif
 
-#if ENABLE_SR
-      com_ptr<IDXGIDevice> native_dxgi_device;
+      com_ptr<IDXGIDevice1> native_dxgi_device;
       hr = native_device->QueryInterface(&native_dxgi_device);
+      assert(SUCCEEDED(hr));
+
+      // Lot of games are not setting this by them self,
+      // so it defaults to 3 which introduces significant input latency.
+      hr = native_dxgi_device->SetMaximumFrameLatency(1);
+      assert(SUCCEEDED(hr));
+
+#if ENABLE_SR
       com_ptr<IDXGIAdapter> native_adapter;
-      if (SUCCEEDED(hr))
-      {
-         hr = native_dxgi_device->GetAdapter(&native_adapter);
-      }
+      hr = native_dxgi_device->GetAdapter(&native_adapter);
       assert(SUCCEEDED(hr));
 
       bool selected_sr_implementation = false;

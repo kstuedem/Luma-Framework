@@ -1,5 +1,7 @@
 #define GAME_BIOSHOCK_SERIES 1
 
+#define ENABLE_SMAA
+
 #include "..\..\Core\core.hpp"
 
 #include "BS2_CrashFix\BS2_CrashFix.h"
