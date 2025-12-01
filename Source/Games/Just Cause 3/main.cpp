@@ -20,6 +20,7 @@ public:
       std::vector<ShaderDefineData> game_shader_defines_data = {
          {"FORCE_VANILLA_FOG", '1', true, false, "In HDR, the fog texture might get upgraded and thus unclipped, causing the fog to be stronger.\nEnable this to re-clamp it to vanilla levels.", 1},
          {"FORCE_VANILLA_AUTO_EXPOSURE", '0', true, false, "The game auto exposure was calculated after tonemapping, hence HDR will affect it.\nTo keep a exposure level as vanilla SDR, turn this on, however, it doesn't actually seem to look better in HDR.", 1},
+         {"ENABLE_ANAMORPHIC_BLOOM", '0', true, false, "The game bloom was stretched horizontally to emulate the look of film. It doesn't seem to fit with the rest of the game, so Luma disables that by default.", 1},
          {"ENABLE_FAKE_HDR", '1', true, false, "Enable a \"Fake\" HDR boosting effect", 1},
       };
       shader_defines_data.append_range(game_shader_defines_data);
@@ -142,7 +143,7 @@ public:
             mov_sat_onxyzw_onxyzw = ShaderPatching::GetSatInstruction(D3D10_SB_OPERAND_TYPE_OUTPUT, 3);
             appended_patch.insert(appended_patch.end(), reinterpret_cast<uint8_t*>(mov_sat_onxyzw_onxyzw.data()), reinterpret_cast<uint8_t*>(mov_sat_onxyzw_onxyzw.data()) + mov_sat_onxyzw_onxyzw.size() * sizeof(uint32_t));
          }
-         else if(lighting_pattern_found && enable_unorm_emulation)
+         else if (lighting_pattern_found && enable_r11g11b10float_emulation)
          {
             // >= 0 (fixes negative values and NaNs)
             // Note: theoretically we should saturate alpha, but it doesn't seem to ever be a problem

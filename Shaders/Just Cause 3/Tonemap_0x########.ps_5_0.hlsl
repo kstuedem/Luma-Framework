@@ -440,10 +440,10 @@ void main(
   }
 #endif // DEVELOPMENT
 
-#if FILM_GRAIN
+#if FILM_GRAIN // We don't allow disabling it for now as it's rare
   float2 grainUV = v1.xy * float2(16,8) + Consts[12].zw;
   // Film grain is purely additive (and subtractive), not focused on shadow neither highlights. This means perceptually it will be a lot more noticeable in shadow.
-  float filmGrain = FilmGrainTexture.Sample(FilmGrainTexture_s, grainUV).x - 0.5 * 0.018;
+  float filmGrain = (FilmGrainTexture.Sample(FilmGrainTexture_s, grainUV).x - 0.5) * 0.018;
   postProcessedColor = sqr_mirrored(sqrt_mirrored(postProcessedColor) + filmGrain); // Approximate the same gamma space as "tonemappedColor" would have been for film grain
   tonemappedColor += filmGrain;
 #endif
@@ -459,13 +459,14 @@ void main(
   // so we keep any grading on highlights too.
   // The only downside of this is that if ~0.18 was mapped to blue but ~1.0 was mapped to green (e.g.), we clip to ~0.18 so we'd lose the highlights specific grading,
   // but the game doesn't seem to do stuff like that.
-  if (doHDR)
+  if (doHDR) // TODO: redo SDR too? It was extremely clipped. Also find a way to expand the sat range?
   {
     // Note: we could try to do this in BT.2020 but it's unlikely to change much, given that it's the saturation on shadow that would affect it, but we can't control it given it's through the LUT
     tonemapperLostColor = tonemapperInColor != 0.f ? (tonemapperLostColor * (tonemappedColor / tonemapperInColor)) : 0.0;
     outColor.rgb += tonemapperLostColor;
     //outColor.rgb = tonemapperLostColor; // Test raw low color
 
+    // Color grading is massively over saturated and hue shifted in this game, plus it's clipped to BT.709 given it's from a LU;, lowering its intensity and then applying a sat boost after looks better.
     outColor.rgb = lerp(RestoreLuminance(postProcessedColor, outColor.rgb), outColor.rgb, LumaSettings.GameSettings.ColorGradingIntensity);
   }
 #endif
@@ -477,7 +478,7 @@ void main(
   outColor.rgb = outColor.rgb * Consts[12].x + Consts[12].y; // Luma: removed saturate
 #endif
 
-#if DEVELOPMENT && 0 // Test: force output scale
+#if DEVELOPMENT && 0 // Test: force output scale (useful for exposure testing)
   outColor.rgb *= DVS10 * 10;
 #endif
 

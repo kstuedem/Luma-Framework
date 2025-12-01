@@ -6,6 +6,10 @@ cbuffer cbConsts : register(b1)
 SamplerState RenderTarget_s : register(s0);
 Texture2D<float4> RenderTarget : register(t0);
 
+#ifndef ENABLE_ANAMORPHIC_BLOOM
+#define ENABLE_ANAMORPHIC_BLOOM 1
+#endif // ENABLE_ANAMORPHIC_BLOOM
+
 void main(
   float4 v0 : SV_Position0,
   float2 v1 : TEXCOORD0,
@@ -13,9 +17,15 @@ void main(
 {
   float4 r0,r1,r2;
   float2 editedConsts = Consts.xy;
-#if 0 // TODO: fix bloom being stretched horizontally in UW? It's always always stretched??? Maybe it's fine?
-  editedConsts.x /= 3.5555555555555555555555555555556;
-  editedConsts.y /= 1.77777777777777777777777;
+#if !ENABLE_ANAMORPHIC_BLOOM // Luma: fix bloom being stretched horizontally, it had a 1.5 multiplier on the hor axis // TODO: make sure this shader isn't re-used for anything else, given it might
+#if 1 // Stretches but doesn't preserve the overall bloom size, which is fine as bloom was too big anyway (old school)
+  editedConsts.x /= 1.5;
+#elif 0
+  editedConsts.y *= 1.5;
+#elif 1 // Approximately keeps the same overall size, without stretching
+  editedConsts.x /= 1.25;
+  editedConsts.y *= 1.25;
+#endif
 #endif
   r0.xyzw = editedConsts.xyxy * float4(-7.33333302,-7.33333302,-5.42857122,-5.42857122) + v1.xyxy;
   r1.xyz = RenderTarget.Sample(RenderTarget_s, r0.zw).xyz;

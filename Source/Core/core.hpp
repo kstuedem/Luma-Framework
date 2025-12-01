@@ -1042,7 +1042,14 @@ namespace
 #endif
             || device_data.native_pixel_shaders.contains(native_shader_definition.first)
             || device_data.native_compute_shaders.contains(native_shader_definition.first);
-         ASSERT_ONCE_MSG(shader_key_found, "Some of the custom shaders failed to added to the list"); // Make sure they are all added to the array by boot, otherwise follow-up map lookups would add it to the array and make it non thread safe
+         char msg[512];
+         std::snprintf(
+            msg,
+            sizeof(msg),
+            "Some of the custom shaders failed to be added to the list: %s:%s",
+            native_shader_definition.second.file_name,
+            native_shader_definition.second.function_name);
+         ASSERT_ONCE_MSG(shader_key_found, msg); // Make sure they are all added to the array by boot, otherwise follow-up map lookups would add it to the array and make it non thread safe
          if (shader_key_found)
          {
             bool shader_key_valid = false;
@@ -1061,7 +1068,13 @@ namespace
             default:
                ASSERT_ONCE(false); break;
             }
-            ASSERT_ONCE_MSG(shader_key_valid, "Some of the custom shaders failed to be found/compiled");
+            std::snprintf(
+               msg,
+               sizeof(msg),
+               "Some of the custom shaders failed to be found/compiled: %s:%s",
+               native_shader_definition.second.file_name,
+               native_shader_definition.second.function_name);
+            ASSERT_ONCE_MSG(shader_key_valid, msg);
          }
 #endif
       }

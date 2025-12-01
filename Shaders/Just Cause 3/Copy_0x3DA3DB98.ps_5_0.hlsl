@@ -26,13 +26,17 @@ void main(
     {
 #if ENABLE_FAKE_HDR
       float normalizationPoint = 0.025; // Found empyrically
-      float fakeHDRIntensity = 0.1;
+      float fakeHDRIntensity = 0.1; // Hardcoded for now, no other value looked balance so there's not much need to expose it
       float fakeHDRSaturation = LumaSettings.GameSettings.HDRBoostSaturationAmount;
-      outColor.rgb = FakeHDR(outColor.rgb, normalizationPoint, fakeHDRIntensity, fakeHDRSaturation);
+      outColor.rgb = BT2020_To_BT709(FakeHDR(BT709_To_BT2020(outColor.rgb), normalizationPoint, fakeHDRIntensity, fakeHDRSaturation, 0, CS_BT2020));
 #endif
       
       const float paperWhite = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
       const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
+      // Fire is:
+      // DICE_TYPE_BY_LUMINANCE_PQ_CORRECT_CHANNELS_BEYOND_PEAK_WHITE: ~pinkish (looks best)
+      // DICE_TYPE_BY_LUMINANCE_PQ: ~yellow
+      // DICE_TYPE_BY_CHANNEL_PQ: ~white
       DICESettings settings = DefaultDICESettings(DICE_TYPE_BY_LUMINANCE_PQ_CORRECT_CHANNELS_BEYOND_PEAK_WHITE);
       outColor.rgb = DICETonemap(outColor.rgb * paperWhite, peakWhite, settings) / paperWhite;
     }

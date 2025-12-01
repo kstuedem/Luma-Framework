@@ -193,7 +193,7 @@ void main(
     float normalizationPoint = 0.025;
     float fakeHDRIntensity = 0.1;
     float fakeHDRSaturation = LumaSettings.GameSettings.HDRBoostSaturationAmount;
-    outColor.rgb = FakeHDR(outColor.rgb, normalizationPoint, fakeHDRIntensity, fakeHDRSaturation);
+    outColor.rgb = BT2020_To_BT709(FakeHDR(BT709_To_BT2020(outColor.rgb), normalizationPoint, fakeHDRIntensity, fakeHDRSaturation, 0, CS_BT2020));
 #endif
       
     const float paperWhite = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
