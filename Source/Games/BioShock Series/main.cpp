@@ -575,7 +575,7 @@ public:
       }
 
       // Copy the scene and feed it to the additive fog shader, so we can pre-blend with the background in the customized shader, without raising blacks etc
-      // TODO: skip this if fog correction is at 0%, and branch in the shader to not read the background.
+      // TODO: skip this if fog correction is at 0%, and branch in the shader to not read the background. Also, disable the blend, so it's cheaper to run.
       if (is_custom_pass && !game_device_data.drew_tonemap && original_shader_hashes.Contains(shader_hashes_Fog))
       {
          com_ptr<ID3D11RenderTargetView> rtv;
