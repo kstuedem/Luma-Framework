@@ -5365,7 +5365,7 @@ namespace
                            uint64_t resource_view = prev_resource_view;
                            if (FindOrCreateIndirectUpgradedResourceView(device, prev_resource_view, resource_view, device_data, true, reshade::api::resource_usage::render_target, lock_device_read))
                            {
-                              rtvs[pixel_shader_hashes->second.second[i]] = reinterpret_cast<ID3D11RenderTargetView*>(resource_view);
+                              rtvs[pixel_shader_hashes->second.first[i]] = reinterpret_cast<ID3D11RenderTargetView*>(resource_view);
                               any_changed = true;
                            }
                         }
