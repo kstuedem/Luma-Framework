@@ -134,8 +134,8 @@ namespace SR
 			unsigned int render_height = 0;
 
 			float pre_exposure = 0.f; // Ignored if 0
-			float jitter_x = 0.f; // In NCD space
-			float jitter_y = 0.f; // In NCD space
+			float jitter_x = 0.f; // In UV space (from -0.5 to 0.5, not influenced by resolution)
+			float jitter_y = 0.f; // In UV space (from -0.5 to 0.5, not influenced by resolution)
 			float vert_fov = 0.f; // Radians. Ignored if 0 (not always needed)
 			float near_plane = 0.f;
 			float far_plane = 1.f;
@@ -150,5 +150,8 @@ namespace SR
 
 		// Returns the suggested or requested period, depending on the implementation.
 		virtual int GetJitterPhases(const SR::InstanceData* data) const { return 1; } // TODO: implement around and fine the best values for DLSS etc
+		
+		// Whether the implementation leaves the state dirty compared to when it begun
+		virtual bool NeedsStateRestoration() const { return false; }
 	};
 }
