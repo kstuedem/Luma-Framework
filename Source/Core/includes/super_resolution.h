@@ -140,7 +140,7 @@ namespace SR
 			float near_plane = 0.f;
 			float far_plane = 1.f;
 			float time_delta = -1.f; // Seconds. Ignored if < 0 (not always needed)
-         uint64_t frame_index = 0;
+			unsigned long long frame_index = 0; // TODO: figure out why using uint64_t breaks the build here
 			float user_sharpness = -1.f; // Ignored/default if < 0. Neutral at 0 (at least in FSR).
 		};
 
