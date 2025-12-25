@@ -513,6 +513,7 @@ public:
             {
                frame_jitters = float2(-0.25f, 0.25f);
             }
+#if DEVELOPMENT
             if (cb_luma_global_settings.DevSettings[0])
             {
                frame_jitters.x *= 2.f;
@@ -526,6 +527,7 @@ public:
             {
                frame_jitters.y *= -1.f;
             }
+#endif
          }
          else
          {
