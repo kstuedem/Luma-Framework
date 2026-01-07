@@ -15,9 +15,6 @@
 // Should be <= the max (last) of NVSDK_NGX_PerfQuality_Value
 #define NUM_PERF_QUALITY_MODES 6
 
-// Our rendering presets are pretty much the default ones mentioned in the DLSS SDK, do we want to force them, or do we want to allow NV to change them through updates?
-#define DLSS_FORCE_RENDER_PRESET 1
-
 namespace NGX
 {
 	const char* project_id = "d8238c51-1f2f-438d-a309-38c16e33c716"; // This needs to be a GUID. We generated a unique one. This isn't registered by NV. This was generated for Luma. It's ok to share it for all games.
@@ -107,22 +104,7 @@ namespace NGX
 			// NOTE: we might also want to check against the closest "DLSSOptimalSettingsInfo" for its "Max_width" and "Max_height"
 			// to check if we are actually running DLAA or DLSS? It's probably unnecessary.
 			const bool is_dlaa = perf_quality_value == NVSDK_NGX_PerfQuality_Value::NVSDK_NGX_PerfQuality_Value_DLAA || (settings_data.render_width >= settings_data.output_width && settings_data.render_height >= settings_data.output_height);
-
-			NVSDK_NGX_DLSS_Hint_Render_Preset render_preset = NVSDK_NGX_DLSS_Hint_Render_Preset_Default;
-#if DLSS_FORCE_RENDER_PRESET
-			if (settings_data.use_experimental_features)
-			{
-				render_preset = NVSDK_NGX_DLSS_Hint_Render_Preset((int)NVSDK_NGX_DLSS_Hint_Render_Preset_K);
-			}
-			else
-			{
-				render_preset = NVSDK_NGX_DLSS_Hint_Render_Preset_E;
-				if (is_dlaa)
-				{
-					render_preset = NVSDK_NGX_DLSS_Hint_Render_Preset_F;
-				}
-			}
-#endif // DLSS_FORCE_RENDER_PRESET
+			NVSDK_NGX_DLSS_Hint_Render_Preset render_preset = static_cast<NVSDK_NGX_DLSS_Hint_Render_Preset>(settings_data.render_preset);
 
 			// Set all of them for simplicity, these params belong to a specific quality mode anyway.
 			// If we set "NVSDK_NGX_DLSS_Hint_Render_Preset_Default", it should be equal to not setting anything at all.
