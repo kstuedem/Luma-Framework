@@ -125,7 +125,11 @@ float InverseLerp(float a, float b, float value)
 
 float Sign_Fast(float x)
 {
+#if 1
   return x >= 0.0 ? 1.0 : -1.0;
+#else // Faster version, though it mibht be unsafe for extreme values
+  return mad(saturate(mad(x, FLT_MAX, 0.5f)), 2.f, -1.f);
+#endif
 }
 float2 Sign_Fast(float2 x)
 {

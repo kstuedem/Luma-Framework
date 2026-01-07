@@ -43,7 +43,7 @@
 #endif
 
 #if _0806297C || _0FFE0AED || _1BCED85C || _211FB55F || _27E3BE86 || _288047AA || _435E4F7A || _44880094 || _49644172 || _4E137FCB || _4F61099C || _5109AB83 || _6EA8AD80 || _7C04055C || _A0B3FA64 || _A78AC640 || _B3BE6B94 || _B756FB04 || _B8D26E59 || _D259AA98 || _DB3F0961 || _E79BD563 || _E87A3D68 || _EA9C5691
-#define EDGE_AA 1
+#define HIGHLIGHT_OUTLINE 1
 #endif
 
 // Defaults:
@@ -78,8 +78,8 @@
 #ifndef DOF_CBUFFER
 #define DOF_CBUFFER 0
 #endif
-#ifndef EDGE_AA
-#define EDGE_AA 0
+#ifndef HIGHLIGHT_OUTLINE
+#define HIGHLIGHT_OUTLINE 0
 #endif
 #ifndef BLUR
 #define BLUR 0
@@ -92,8 +92,8 @@
 #endif
 
 // Luma settings:
-#ifndef ALLOW_EDGE_AA
-#define ALLOW_EDGE_AA 1
+#ifndef ENABLE_HIGHLIGHT_OUTLINE
+#define ENABLE_HIGHLIGHT_OUTLINE 1
 #endif
 #ifndef IMPROVED_COLOR_GRADING_TYPE
 #define IMPROVED_COLOR_GRADING_TYPE 2
@@ -101,8 +101,17 @@
 #ifndef ENABLE_BLOOM
 #define ENABLE_BLOOM 1
 #endif
+#ifndef ENABLE_DEPTH_OF_FIELD
+#define ENABLE_DEPTH_OF_FIELD 1
+#endif
+#ifndef ENABLE_MOTION_BLUR
+#define ENABLE_MOTION_BLUR 1
+#endif
 #ifndef ENABLE_COLOR_GRADING
 #define ENABLE_COLOR_GRADING 1
+#endif
+#ifndef ENABLE_IMPROVED_MOTION_BLUR
+#define ENABLE_IMPROVED_MOTION_BLUR 1
 #endif
 
 // Exclusively specify the pack offset for the first used variable.
@@ -111,7 +120,7 @@
 cbuffer _Globals : register(b0)
 {
   float4 padding01[64]; // Simulate the "packoffset(c64)" from their design (the first cbuffer var always had that offset)
-#if EDGE_AA || BLUR_CBUFFER
+#if HIGHLIGHT_OUTLINE || BLUR_CBUFFER
   float2 d019_SrcTexture0SizeInv;
 #endif
 #if BLEND
@@ -130,7 +139,7 @@ cbuffer _Globals : register(b0)
   float4 pp13_MaxBlurNear; // float1
 #endif
   row_major float3x4 pp14_BloomColorMatrix;
-#if EDGE_AA
+#if HIGHLIGHT_OUTLINE
   float4 pp17_EdgeTrashold; // float1
   float4 pp18_EdgePower; // float1
   float4 pp19_EdgeWidth; // float1
@@ -139,7 +148,7 @@ cbuffer _Globals : register(b0)
   float4 pp20_RBlurNoblurRadius; // float1
   float4 pp21_RBlurBlendAmount; // float1
 #endif
-#if EDGE_AA || DOF_CBUFFER
+#if HIGHLIGHT_OUTLINE || DOF_CBUFFER
   float4 pp24_NearFarTFovRAspect;
 #endif
 #if DOUBLE_BLUR
@@ -151,12 +160,12 @@ cbuffer _Globals : register(b0)
   float4 pp41_MotionBlurScale; // float1
   float3 pp42_MotionBlurVelocity;
 #endif
-#if EDGE_AA
+#if HIGHLIGHT_OUTLINE
   float4 pp44_SmoothEdgesAmount; // float1
 #endif
 }
 
-Texture2D<float> s040_DepthTexture : register(t0);
+Texture2D<float> s040_DepthTexture : register(t0); // TODO: this might also be a motion vectors mask?
 SamplerState s040_DepthTexture_sampler_s : register(s0);
 Texture2D<float4> s050_PostProcessSrcTexture : register(t8);
 SamplerState s050_PostProcessSrcTexture_sampler_s : register(s8);
@@ -233,9 +242,9 @@ void main(
   float4 r0,r1,r2,r3,r4,r5,r6;
   int4 r1i;
   float4 sceneColor = s050_PostProcessSrcTexture.Sample(s050_PostProcessSrcTexture_sampler_s, v1.xy).xyzw;
-  float depth = s040_DepthTexture.Sample(s040_DepthTexture_sampler_s, v1.xy).x;
+  float depth = s040_DepthTexture.Sample(s040_DepthTexture_sampler_s, v1.xy).x; // 0-1 device depth (0 maps to near, not camera origin)
 
-#if EDGE_AA && ALLOW_EDGE_AA // TODO: disable by default in Luma? FXAA is better, why is it here then? This is enabled anyway. It doesn't seem to do anything? I can't tell. Maybe it's for object outlines or something...
+#if HIGHLIGHT_OUTLINE && ENABLE_HIGHLIGHT_OUTLINE // TODO: expose disabling this for max imersion in case the game didn't already expose this in the settings...
   const float4 icb[] = { { 0, 0, 0.196172, 0},
                               { -1.000000, -1.000000, 0.076555, 0},
                               { -1.000000, 1.000000, 0.076555, 0},
@@ -282,65 +291,74 @@ void main(
     r4.xyzw = r3.xyzw;
     r1i.w = 1;
     while (true) {
-      if (r1i.w >= 9) break;
+      if (r1i.w >= 9) break; // 9 samples?
       r5.xy = icb[r1i.w].xy * d019_SrcTexture0SizeInv.xy;
       r5.xy = r5.xy * pp44_SmoothEdgesAmount.x + v1.xy;
       r5.xyzw = s050_PostProcessSrcTexture.Sample(s050_PostProcessSrcTexture_sampler_s, r5.xy).xyzw;
-      r4.xyzw = r5.xyzw * icb[r1i.w].z + r4.xyzw;
+      r4.xyzw += r5.xyzw * icb[r1i.w].z;
       r1i.w += 1;
     }
-    r4.x = pp18_EdgePower.x + r4.x;
+    r4.x += pp18_EdgePower.x; // Strength of the outline
     r1.x = dot(r1.xyz, r2.xyz);
     r1.x = cmp(r1.x < pp17_EdgeTrashold.x);
     r1.x = r1.x ? 1.0 : 0;
-    r2.xyzw = r4.xyzw - sceneColor;
-    sceneColor = r1.x * r2.xyzw + sceneColor;
+    sceneColor = lerp(sceneColor, r4, r1.x);
   }
-#endif // EDGE_AA && ALLOW_EDGE_AA
+#endif // HIGHLIGHT_OUTLINE && ENABLE_HIGHLIGHT_OUTLINE
 
-#if MOTION_BLUR
-  r1.x = s053_PostProcessSrcTexture3.Sample(s053_PostProcessSrcTexture3_sampler_s, v1.xy).z;
-  r1.x = cmp(r1.x < 1);
-  if (r1.x != 0) {
-    r2.xy = v1.xy * float2(2,-2) + float2(-1,1);
-    r2.zw = float2(1,1);
-    r3.x = dot(pp40_ViewProjMatInv._m00_m01_m02_m03, r2.xyww);
-    r3.y = dot(pp40_ViewProjMatInv._m10_m11_m12_m13, r2.xyww);
-    r3.z = dot(pp40_ViewProjMatInv._m20_m21_m22_m23, r2.xyww);
-    r1.y = dot(pp40_ViewProjMatInv._m30_m31_m32_m33, r2.xyzw);
-    r1.yzw = r3.xyz / r1.y;
-    r2.xyz = r1.yzw * depth + pp42_MotionBlurVelocity.xyz;
-    r2.w = 1;
-    r3.x = dot(pp39_ViewProjMatLastFrame._m00_m01_m02_m03, r2.xyzw);
-    r3.y = dot(pp39_ViewProjMatLastFrame._m10_m11_m12_m13, r2.xyzw);
-    r1.y = dot(pp39_ViewProjMatLastFrame._m30_m31_m32_m33, r2.xyzw);
-    r1.yz = r3.xy / r1.yy;
-    r2.xy = v1.xy * float2(2,-2) + float2(-1,1);
-    r1.yz = -r2.xy + r1.yz;
-    r1.yz = pp41_MotionBlurScale.x * r1.yz;
-    r2.xy = float2(0.125,0.125) * r1.yz;
-    r1.x = 1.001 - depth;
-    r2.z = -r2.y;
-    r1.xy = r2.xz * r1.xx;
-    r1.z = dot(r1.xy, r1.xy);
-    r1.z = sqrt(r1.z);
-    r1.xy = r1.xy / r1.zz;
-    r1.z = min(0.005, r1.z);
-    r2.xyz = sceneColor.xyz;
-    r3.xy = v1.xy;
+#if MOTION_BLUR && ENABLE_MOTION_BLUR
+  float mbInvIntensity = s053_PostProcessSrcTexture3.Sample(s053_PostProcessSrcTexture3_sampler_s, v1.xy).z;
+  // Skip MB if this pixel doesn't want it (usually it masks the player car)
+  if (mbInvIntensity < 1.0) {
+    float4 currNDC = float4(v1.xy * float2(2,-2) + float2(-1,1), 1.0, 1.0);
+    r3.x = dot(pp40_ViewProjMatInv._m00_m01_m02_m03, currNDC);
+    r3.y = dot(pp40_ViewProjMatInv._m10_m11_m12_m13, currNDC);
+    r3.z = dot(pp40_ViewProjMatInv._m20_m21_m22_m23, currNDC);
+    r1.y = dot(pp40_ViewProjMatInv._m30_m31_m32_m33, currNDC);
+    // TODO: this function would take the linearized 0-1 normalized depth, so that 0 maps to camera origin, I think, but here it's device depth
+    float4 worldPos = float4((r3.xyz / r1.y) * depth + pp42_MotionBlurVelocity.xyz, 1.0); // Add camera world offset
+    r3.x = dot(pp39_ViewProjMatLastFrame._m00_m01_m02_m03, worldPos);
+    r3.y = dot(pp39_ViewProjMatLastFrame._m10_m11_m12_m13, worldPos);
+    r1.y = dot(pp39_ViewProjMatLastFrame._m30_m31_m32_m33, worldPos);
+    float2 prevNDC = r3.xy / r1.y;
+
+    float2 mbNDCOffset = prevNDC - currNDC.xy;
+    mbNDCOffset *= pp41_MotionBlurScale.x; // This scale dependingly on the current frame rate, so MB intensity is always the same (unrelated to the car/camera speed)
+    float2 mbUVOffset = float2(0.125, -0.125) * mbNDCOffset * (1.001 - depth); // Not sure why it's not 1-depth, probably some safety threshold (that likely has negative consequences too)
+    
+#if ENABLE_IMPROVED_MOTION_BLUR // Disable MB speed clamping as it's not really needed (I think it looks better without, stronger bloom on the edges of the screen when going fast)
+    float mbLength = 1.0;
+#else
+    // Limit motion blur length to a maximum offset, to avoid it being too strong (could be distracting or cause glitches)
+    float2 mbLength = sqrt(dot(mbUVOffset, mbUVOffset));
+    // Luma: made division by lenght safe against 0
+    mbUVOffset /= mbLength >= FLT_EPSILON ? mbLength : 1.0;
+    // Luma: fixed mb offset being clipped less aggressively in ultrawide
+    float originalAspectRatio = 16.f / 9.f;
+    float targetAspectRatio = LumaSettings.SwapchainSize.x * LumaSettings.SwapchainInvSize.y;
+    mbLength = min(float2(0.005 * originalAspectRatio / targetAspectRatio, 0.005), mbLength);
+#endif
+
+    float3 mbColorSum = sceneColor.xyz;
+    float2 mbUV = v1.xy;
+    const int mbOriginalSamples = 8;
+    int mbSamples = mbOriginalSamples;
+    float2 mbStrength = 1.0; // Expose if necessary
+#if ENABLE_IMPROVED_MOTION_BLUR
+    mbSamples *= 2; // Luma: double the MB quality, at a small performance cost (mb is only used when driving)
+#endif
     r1i.w = 1;
-    const int dofSamples = 8;
     while (true) {
-      if (r1i.w >= dofSamples) break;
-      r3.xy = r1.xy * r1.z + r3.xy;
-      r2.w = s053_PostProcessSrcTexture3.SampleLevel(s053_PostProcessSrcTexture3_sampler_s, r3.xy, 0).z;
-      r4.xyz = s050_PostProcessSrcTexture.SampleLevel(s050_PostProcessSrcTexture_sampler_s, r3.xy, 0).xyz;
-      r2.xyz += lerp(r4.xyz, sceneColor.xyz, r2.w);
+      if (r1i.w >= mbSamples) break;
+      mbUV += mbUVOffset * mbLength * (float(mbOriginalSamples) / float(mbSamples)) * mbStrength; // Reduce the UVs offsets if we increased the MB quality, we don't want to increase the radius
+      mbInvIntensity = s053_PostProcessSrcTexture3.SampleLevel(s053_PostProcessSrcTexture3_sampler_s, mbUV, 0).z;
+      float3 mbSceneColor = s050_PostProcessSrcTexture.SampleLevel(s050_PostProcessSrcTexture_sampler_s, mbUV, 0).xyz;
+      mbColorSum += lerp(mbSceneColor.xyz, sceneColor.xyz, mbInvIntensity);
       r1i.w += 1;
     }
-    sceneColor.xyz = r2.xyz / float(dofSamples);
+    sceneColor.xyz = mbColorSum / float(mbSamples);
   }
-#endif // MOTION_BLUR
+#endif // MOTION_BLUR && ENABLE_MOTION_BLUR
 
 #if MORE_TEXCOORDS
   float3 bloomColor = s052_PostProcessSrcTexture2.Sample(s052_PostProcessSrcTexture2_sampler_s, v3.xy).xyz;
@@ -352,7 +370,7 @@ void main(
 
   float3 composedColor = sceneColor.xyz;
 
-#if DOF
+#if DOF && ENABLE_DEPTH_OF_FIELD
   r1.w = v1.y * 2 + -1;
   r2.y = pp24_NearFarTFovRAspect.w * r1.w;
   r2.x = v1.x * 2 + -1;
@@ -381,7 +399,7 @@ void main(
     blendedColor = lerp(blendedColor, color1, blendFactors.y);
     composedColor = lerp(blendedColor, bloomColor, blendFactors.z);
   }
-#endif // DOF
+#endif // DOF && ENABLE_DEPTH_OF_FIELD
 
 #if BLEND
   // This takes care of blending our buffers if there was no other blend factor from blur or DoF

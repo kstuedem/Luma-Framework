@@ -366,7 +366,7 @@ namespace
       // It should work until any shader does ".Load()" on a texture, or gets their dimensions from shaders.
       float indirect_upgraded_textures_size_scaling = 1.f;
 #endif
-	   // List of render targets (and unordered access) textures that we upgrade to R16G16B16A16_FLOAT.
+	   // List of render targets (and unordered access) textures that we upgrade to R16G16B16A16_FLOAT or other formats (depends on GetBestResourceUpgradeFormat()).
       // Most formats are supported but some might not act well when upgraded.
       std::unordered_set<reshade::api::format> texture_upgrade_formats;
       // Redirect incompatible copies between UNORM and FLOAT textures to a custom pixel shader that would do the same (not globally compatible).
@@ -424,7 +424,7 @@ namespace
 
       // Automatically upgrade the formats of the textures this shader pass draws to. Generally best used on shaders that originally encoded from HDR (native rendering) to SDR. If the source textures were SDR too (UNORM), they'd need to be upgraded through other means.
       // First pair value is the RTVs indexes to upgrade, the second one the UAVs (whether it's a pixel or compute shader).
-      // This is meant to be used if "enable_indirect_texture_format_upgrades" is off, or if very specific custom upgrades are needed. For now these are all hardcoded to R16G16B16A16_FLOAT upgrades.
+      // This is meant to be used if "enable_indirect_texture_format_upgrades" is off, or if very specific custom upgrades are needed.
       // This assumes that when the upgraded texture is created (it could be at any time, if the target shader doesn't always run), the original texture values aren't relevant, because they won't be preserved.
       // Currently requires "enable_automatic_indirect_texture_format_upgrades" to work, otherwise other views from the late upgraded textures don't ever get mirrored.
       std::unordered_map<uint32_t, std::pair<std::vector<uint8_t>, std::vector<uint8_t>>> auto_texture_format_upgrade_shader_hashes;
@@ -738,6 +738,7 @@ namespace
    void AutoDumpShaders();
    void AutoLoadShaders(DeviceData* device_data);
    void OnDestroyPipeline(reshade::api::device* device, reshade::api::pipeline pipeline);
+   reshade::api::format GetBestResourceUpgradeFormat(const reshade::api::resource_desc& desc);
 
    // Returns true if any shader or pipeline has been replaced, meaning that the mod will at least do something (this is representative of how most, but not necessarily all, mods work)
    bool IsModActive(const DeviceData& device_data)
@@ -4242,8 +4243,8 @@ namespace
          lock_device_read.unlock(); // Avoids deadlocks with the device
 
          reshade::api::resource mirrored_upgraded_resource;
-         reshade::api::resource_desc target_desc = device->get_resource_desc({in_resource});
-         reshade::api::resource_desc source_desc = target_desc;
+         reshade::api::resource_desc source_desc = device->get_resource_desc({in_resource});
+         reshade::api::resource_desc target_desc = source_desc;
          bool needs_upgraded_resource;
          if (in_source_resource)
          {
@@ -4255,11 +4256,10 @@ namespace
                target_desc.texture.format = source_desc.texture.format;
             }
          }
-         else // Hardcoded upgrade format
+         else // Upgrade format
          {
-            source_desc.texture.format = reshade::api::format::r16g16b16a16_float;
+            target_desc.texture.format = GetBestResourceUpgradeFormat(source_desc);
             needs_upgraded_resource = source_desc.texture.format != target_desc.texture.format;
-            target_desc.texture.format = source_desc.texture.format;
          }
          // TODO: optionally copy the content of "in_resource"?
          if (needs_upgraded_resource && device->create_resource(target_desc, nullptr, initial_state, &mirrored_upgraded_resource))
@@ -4315,12 +4315,14 @@ namespace
          auto original_resource_to_mirrored_upgraded_resource = device_data.original_resources_to_mirrored_upgraded_resources.find(resource.handle);
          if (original_resource_to_mirrored_upgraded_resource != device_data.original_resources_to_mirrored_upgraded_resources.end())
          {
+            const auto original_resource_to_mirrored_upgraded_resource_ptr = original_resource_to_mirrored_upgraded_resource->second;
+
             lock_device_read.unlock(); // Avoids deadlocks with the device
 
             reshade::api::resource_view_desc resource_view_desc = device->get_resource_view_desc({ in_rv });
 
             reshade::api::resource_view mirrored_upgraded_resource_view;
-            if (device->create_resource_view({original_resource_to_mirrored_upgraded_resource->second}, usage, resource_view_desc, &mirrored_upgraded_resource_view))
+            if (device->create_resource_view({original_resource_to_mirrored_upgraded_resource_ptr}, usage, resource_view_desc, &mirrored_upgraded_resource_view))
             {
                std::unique_lock lock_device_write(device_data.mutex);
                if (!device_data.original_resource_views_to_mirrored_upgraded_resource_views.contains(mirrored_upgraded_resource_view.handle))
@@ -6650,6 +6652,86 @@ namespace
       device_data.custom_sampler_by_original_sampler.erase(sampler.handle);
    }
 
+   // Takes a view desc the game would have tried to use with a resource we upgraded (directly or indirectly),
+   // and returns the best suitable format for an upgraded view.
+   // Note that some games already acknowledge direct texture upgrade format changes, and try to create views accordingly.
+   // Some other games pass in "0" as format, meaning the view should pick the most intuitive/basic format for it.
+   reshade::api::format GetBestResourceViewUpgradeFormat(const reshade::api::resource_view_desc& original_view_desc, reshade::api::resource_usage usage_type, const reshade::api::resource_desc& original_desc, const reshade::api::resource_desc& upgraded_desc)
+   {
+      // Straight forward upgrade (fast common path), couldn't really be otherwise
+      if (upgraded_desc.texture.format == reshade::api::format::r16g16b16a16_float)
+      {
+         return reshade::api::format::r16g16b16a16_float;
+      }
+      // Depth
+      else if (upgraded_desc.texture.format == reshade::api::format::r32_typeless || upgraded_desc.texture.format == reshade::api::format::r32_float || upgraded_desc.texture.format == reshade::api::format::d32_float)
+      {
+         if ((usage_type & reshade::api::resource_usage::depth_stencil) != 0)
+         {
+            return reshade::api::format::d32_float;
+         }
+         else
+         {
+            ASSERT_ONCE(IsFloatFormat(DXGI_FORMAT(original_view_desc.format))); // We might not want to use a float view in this case? We probably do anyway!
+            return reshade::api::format::r32_float;
+         }
+      }
+      // Depth + Stencil
+      else if (upgraded_desc.texture.format == reshade::api::format::r32_g8_typeless || upgraded_desc.texture.format == reshade::api::format::d32_float_s8_uint)
+      {
+         if ((usage_type & reshade::api::resource_usage::depth_stencil) != 0)
+         {
+            return reshade::api::format::d32_float_s8_uint;
+         }
+         else
+         {
+            // If we got here, the game would have originally been using a depth buffer with a stencil, so preserve the right stencil/depth view
+            return (original_view_desc.format == reshade::api::format::x24_unorm_g8_uint) ? reshade::api::format::x32_float_g8_uint : reshade::api::format::r32_float_x8_uint;
+         }
+      }
+      // All other
+      else
+      {
+         if (IsTypelessFormat(DXGI_FORMAT(original_desc.texture.format)))
+         {
+            ASSERT_ONCE(!IsTypelessFormat(DXGI_FORMAT(original_view_desc.format)));
+            ASSERT_ONCE(GetTypelessFormat(DXGI_FORMAT(original_view_desc.format)) == DXGI_FORMAT(original_desc.texture.format));
+            // TODO: return the format we upgraded the resource to, if it's not typeless, otherwise restore the most common one? FLOAT?
+         }
+         else
+         {
+            ASSERT_ONCE(GetTypelessFormat(DXGI_FORMAT(original_view_desc.format)) == GetTypelessFormat(DXGI_FORMAT(original_desc.texture.format))); // Just verify the game tried to create the resource view with the proper (upgraded) format already? This might trigger and we might need to remove it
+
+            // Return the raw texture format. "GetBestResourceUpgradeFormat()" never returns typeless formats for non depth/stencil textures, so they are generally directly usable.
+            return upgraded_desc.texture.format;
+         }
+      }
+
+      return original_view_desc.format; // Unchanged
+   }
+
+   // TODO: if the source format was like R8G8_UNORM, only upgrade it to R16G16_FLOAT unless otherwise specified? Just expose the format! We could hardcode a list of in/out format upgrades here for example! Update "GetBestResourceViewUpgradeFormat()" accordingly!
+   // Note: this doesn't have any fallbacks, it always picks an upgraded format, so only call when you actually want to upgrade a format.
+   // Avoid returning typeless formats here, because then we'd need to pick a non typeless view format, and we wouldn't know how to make that choice.
+   reshade::api::format GetBestResourceUpgradeFormat(const reshade::api::resource_desc& desc)
+   {
+      const bool is_depth = (desc.usage & reshade::api::resource_usage::depth_stencil) != 0;
+
+      if (is_depth)
+      {
+         // Preserve the stencil if we can!
+         if (desc.texture.format == reshade::api::format(DXGI_FORMAT_R24G8_TYPELESS)
+            || desc.texture.format == reshade::api::format(DXGI_FORMAT_D24_UNORM_S8_UINT)
+            || desc.texture.format == reshade::api::format(DXGI_FORMAT_R32G8X24_TYPELESS))
+         {
+            return reshade::api::format::r32_g8_typeless;
+         }
+         return reshade::api::format::r32_typeless; // Create it as typeless of the maximum depth, so we can also cast it as SRV
+      }
+
+      return reshade::api::format::r16g16b16a16_float;
+   }
+
    // TODO: cache the last "almost" upgraded texture resolution to make sure that when the swapchain changes res, we didn't fail to upgrade resources before (needed even with indirect upgrades)
    std::optional<reshade::api::format> ShouldUpgradeResource(const reshade::api::resource_desc& desc, const DeviceData& device_data, bool has_initial_data = false)
    {
@@ -6791,13 +6873,7 @@ namespace
       {
          if (type_and_size_filter)
          {
-            // Preserve the stencil if we can!
-            if (desc.texture.format == reshade::api::format(DXGI_FORMAT_R24G8_TYPELESS)
-               || desc.texture.format == reshade::api::format(DXGI_FORMAT_D24_UNORM_S8_UINT))
-            {
-               return reshade::api::format::r32_g8_typeless;
-            }
-            return reshade::api::format::r32_typeless; // Create it as typeless of the maximum depth, so we can also cast it as SRV
+            return GetBestResourceUpgradeFormat(desc);
          }
          return std::nullopt;
       }
@@ -6827,7 +6903,7 @@ namespace
 
       if (type_and_size_filter)
       {
-         return reshade::api::format::r16g16b16a16_float; // TODO: if the source format was like R8G8_UNORM, only upgrade it to R16G16_FLOAT unless otherwise specified? Just expose the format! Do the same for the indirect upgraded textures. This format is hardcoded in a few places to check around.
+         return GetBestResourceUpgradeFormat(desc);
       }
       return std::nullopt;
    }
@@ -6922,9 +6998,11 @@ namespace
 
          if (enable_indirect_texture_format_upgrades)
          {
-            ASSERT_ONCE(desc.texture.format != reshade::api::format::r16g16b16a16_float); // Why did we get here?
+            reshade::api::format upgraded_format = GetBestResourceUpgradeFormat(desc);
+            ASSERT_ONCE(desc.texture.format != upgraded_format); // Why did we get here?
+
             reshade::api::resource_desc upgraded_desc = desc;
-            upgraded_desc.texture.format = reshade::api::format::r16g16b16a16_float;
+            upgraded_desc.texture.format = upgraded_format;
 
             lock.unlock(); // Avoids deadlocks with the device
 
@@ -7033,7 +7111,7 @@ namespace
          }
 
          waiting_on_upgraded_resource_init = true;
-         upgraded_resource_init_desc = desc;
+         upgraded_resource_init_desc = desc; // Purposely left to the original value if "enable_indirect_texture_format_upgrades" is true
          bool converted_initial_data = false;
          // We need to convert the initial data to the new format
          if (initial_data != nullptr && !enable_indirect_texture_format_upgrades)
@@ -7071,10 +7149,10 @@ namespace
       auto original_resource_to_mirrored_upgraded_resource = device_data.original_resources_to_mirrored_upgraded_resources.find(resource.handle);
       if (original_resource_to_mirrored_upgraded_resource != device_data.original_resources_to_mirrored_upgraded_resources.end())
       {
-         const auto mirrored_upgraded_resource = original_resource_to_mirrored_upgraded_resource->second;
+         const auto original_resource_to_mirrored_upgraded_resource_ptr = original_resource_to_mirrored_upgraded_resource->second;
          device_data.original_resources_to_mirrored_upgraded_resources.erase(original_resource_to_mirrored_upgraded_resource);
          lock.unlock(); // Avoids deadlocks with the device
-         device->destroy_resource({ mirrored_upgraded_resource });
+         device->destroy_resource({ original_resource_to_mirrored_upgraded_resource_ptr });
          lock.lock();
       }
       device_data.upgraded_resources.erase(resource.handle);
@@ -7188,6 +7266,7 @@ namespace
 
 #if DEVELOPMENT
          bool usage_filter = usage_type == reshade::api::resource_usage::render_target || usage_type == reshade::api::resource_usage::unordered_access || usage_type == reshade::api::resource_usage::shader_resource; // This is all of the possible types anyway...
+         // Note: this ignores all formats returned by "GetBestResourceViewUpgradeFormat()" except one, given that we'd need more code to check for typeless compatibility on all formats
          if (usage_filter && ShouldUpgradeResource(resource_desc, device_data).has_value() && resource_desc.texture.format == reshade::api::format::r16g16b16a16_float)
          {
             switch (desc.format)
@@ -7236,56 +7315,19 @@ namespace
                desc.texture.layer_count = resource_desc.texture.depth_or_layers;
             }
 
-            if (resource_desc.texture.format == reshade::api::format::r16g16b16a16_float)
-            {
-               desc.format = reshade::api::format::r16g16b16a16_float;
-            }
-            else if (resource_desc.texture.format == reshade::api::format::r32_typeless || resource_desc.texture.format == reshade::api::format::r32_float || resource_desc.texture.format == reshade::api::format::d32_float)
-            {
-               if ((usage_type & reshade::api::resource_usage::depth_stencil) != 0)
-               {
-                  desc.format = reshade::api::format::d32_float;
-               }
-               else
-               {
-                  ASSERT_ONCE(IsFloatFormat(DXGI_FORMAT(desc.format))); // We might not want to use a float view in this case? We probably do anyway!
-                  desc.format = reshade::api::format::r32_float;
-               }
-            }
-            else if (resource_desc.texture.format == reshade::api::format::r32_g8_typeless || resource_desc.texture.format == reshade::api::format::d32_float_s8_uint)
-            {
-               if ((usage_type & reshade::api::resource_usage::depth_stencil) != 0)
-               {
-                  desc.format = reshade::api::format::d32_float_s8_uint;
-               }
-               else
-               {
-                  // If we got here, the game would have originally been using a depth buffer with a stencil, so preserve the right stencil/depth view
-                  desc.format = (desc.format == reshade::api::format::x24_unorm_g8_uint) ? reshade::api::format::x32_float_g8_uint : reshade::api::format::r32_float_x8_uint;
-               }
-            }
-            else
-            {
-               if (IsTypelessFormat(DXGI_FORMAT(resource_desc.texture.format)))
-               {
-                  ASSERT_ONCE(!IsTypelessFormat(DXGI_FORMAT(desc.format)));
-                  ASSERT_ONCE(GetTypelessFormat(DXGI_FORMAT(desc.format)) == DXGI_FORMAT(resource_desc.texture.format));
-                  // TODO: return the format we upgraded the resource to, if it's not typeless, otherwise restore the most common one? FLOAT?
-               }
-               else
-               {
-                  ASSERT_ONCE(GetTypelessFormat(DXGI_FORMAT(desc.format)) == GetTypelessFormat(DXGI_FORMAT(resource_desc.texture.format))); // Just verify the game tried to create the resource view with the proper (upgraded) format already? This might trigger and we might need to remove it
-                  desc.format = resource_desc.texture.format; // TODO: select the best version for e.g. depth views etc
-               }
-            }
+            desc.format = GetBestResourceViewUpgradeFormat(desc, usage_type, resource_desc, resource_desc);
+
             return true;
          }
       }
 
 #if DEVELOPMENT
+      const reshade::api::resource_desc resource_desc = device->get_resource_desc(resource);
+      reshade::api::format upgraded_format = GetBestResourceUpgradeFormat(resource_desc);
+
       DeviceData& device_data = *device->get_private_data<DeviceData>();
       const std::shared_lock lock(device_data.mutex);
-      if (desc.format != reshade::api::format::r16g16b16a16_float)
+      if (desc.format != upgraded_format)
       {
          ASSERT_ONCE(!device_data.upgraded_resources.contains(resource.handle)); // Why did we get here in this case?
       }
@@ -7389,12 +7431,17 @@ namespace
       auto original_resource_to_mirrored_upgraded_resource = device_data.original_resources_to_mirrored_upgraded_resources.find(resource.handle);
       if (original_resource_to_mirrored_upgraded_resource != device_data.original_resources_to_mirrored_upgraded_resources.end())
       {
-         reshade::api::resource_view_desc upgraded_desc = desc;
-         upgraded_desc.format = reshade::api::format::r16g16b16a16_float;
-
+         const auto original_resource_to_mirrored_upgraded_resource_ptr = original_resource_to_mirrored_upgraded_resource->second;
          lock.unlock(); // Avoids deadlocks with the device
+
+         const reshade::api::resource_desc original_resource_desc = device->get_resource_desc(resource);
+         const reshade::api::resource_desc mirrored_upgraded_resource_desc = device->get_resource_desc({original_resource_to_mirrored_upgraded_resource_ptr}); // The format should match previous calls to "GetBestResourceUpgradeFormat"
+
+         reshade::api::resource_view_desc upgraded_desc = desc;
+         upgraded_desc.format = GetBestResourceViewUpgradeFormat(upgraded_desc, usage_type, original_resource_desc, mirrored_upgraded_resource_desc);
+
          reshade::api::resource_view mirrored_upgraded_resource_view;
-         if (device->create_resource_view({original_resource_to_mirrored_upgraded_resource->second}, usage_type, upgraded_desc, &mirrored_upgraded_resource_view))
+         if (device->create_resource_view({original_resource_to_mirrored_upgraded_resource_ptr}, usage_type, upgraded_desc, &mirrored_upgraded_resource_view))
          {
             lock.lock();
             device_data.original_resource_views_to_mirrored_upgraded_resource_views[view.handle] = mirrored_upgraded_resource_view.handle;
@@ -7771,6 +7818,16 @@ namespace
             reshade::api::resource_desc upgraded_desc = device->get_resource_desc(resource);
             reshade::api::resource_desc original_desc = upgraded_desc;
             original_desc.texture.format = reshade::api::format::r8g8b8a8_unorm; // Guessed
+#if DEVELOPMENT
+            {
+               const std::shared_lock lock(device_data.mutex);
+               if (device_data.original_upgraded_resources_formats.contains(resource.handle))
+               {
+                  original_desc.texture.format = device_data.original_upgraded_resources_formats[resource.handle];
+                  ASSERT_ONCE(original_desc.texture.format == reshade::api::format::r8g8b8a8_unorm); // Cache "original_upgraded_resources_formats" outside of development too if this happens! It probably will at some point!
+               }
+            }
+#endif
 
             const size_t buffer_size = original_desc.texture.height * original_desc.texture.depth_or_layers * data->row_pitch; // Automatic reconstruction based on what we told the game
 
@@ -7831,22 +7888,32 @@ namespace
       reshade::api::resource_desc original_desc;
       reshade::api::resource_desc upgraded_desc;
       {
-         const std::shared_lock lock(device_data.mutex);
+         std::shared_lock lock_device_read(device_data.mutex);
          if (device_data.upgraded_resources.contains(resource.handle)) // This cannot be a swapchain texture, they can't be written by the CPU
          {
+            lock_device_read.unlock(); // Avoid deadlocks with device
             upgraded_desc = device->get_resource_desc(resource);
+            lock_device_read.lock();
             original_desc = upgraded_desc;
             // TODO: stop randomly guessing the format and actually cache it aside! Note that some games might dynamically pre-convert the data to match the upgraded target format, however, that's unlikely
-            ASSERT_ONCE(false);
             original_desc.texture.format = reshade::api::format::r8g8b8a8_unorm;
+#if DEVELOPMENT
+            if (device_data.original_upgraded_resources_formats.contains(resource.handle))
+            {
+               original_desc.texture.format = device_data.original_upgraded_resources_formats[resource.handle];
+               ASSERT_ONCE(original_desc.texture.format == reshade::api::format::r8g8b8a8_unorm); // Cache "original_upgraded_resources_formats" outside of development too if this happens! It probably will at some point!
+            }
+#endif
             convert_data = true;
          }
          auto original_resource_to_mirrored_upgraded_resource = device_data.original_resources_to_mirrored_upgraded_resources.find(resource.handle);
          if (!ignore_indirect_upgraded_textures && original_resource_to_mirrored_upgraded_resource != device_data.original_resources_to_mirrored_upgraded_resources.end())
          {
-            upgraded_desc = device->get_resource_desc({ original_resource_to_mirrored_upgraded_resource->second });
+            const auto original_resource_to_mirrored_upgraded_resource_ptr = original_resource_to_mirrored_upgraded_resource->second;
+            lock_device_read.unlock(); // Avoid deadlocks with device
+            upgraded_desc = device->get_resource_desc({ original_resource_to_mirrored_upgraded_resource_ptr });
             original_desc = device->get_resource_desc(resource);
-            resource.handle = original_resource_to_mirrored_upgraded_resource->second;
+            resource.handle = original_resource_to_mirrored_upgraded_resource_ptr;
             convert_data = true;
          }
       }
@@ -7894,8 +7961,9 @@ namespace
       auto original_resource_view_to_mirrored_upgraded_resource_view = device_data.original_resource_views_to_mirrored_upgraded_resource_views.find(dsv.handle);
       if (!ignore_indirect_upgraded_textures && original_resource_view_to_mirrored_upgraded_resource_view != device_data.original_resource_views_to_mirrored_upgraded_resource_views.end())
       {
+         const auto original_resource_view_to_mirrored_upgraded_resource_view_ptr = original_resource_view_to_mirrored_upgraded_resource_view->second;
          lock.unlock(); // Avoids deadlock with the device
-         cmd_list->clear_depth_stencil_view({ original_resource_view_to_mirrored_upgraded_resource_view->second }, depth, stencil, rect_count, rects);
+         cmd_list->clear_depth_stencil_view({ original_resource_view_to_mirrored_upgraded_resource_view_ptr }, depth, stencil, rect_count, rects);
          return true;
       }
 
@@ -7934,8 +8002,9 @@ namespace
       auto original_resource_view_to_mirrored_upgraded_resource_view = device_data.original_resource_views_to_mirrored_upgraded_resource_views.find(rtv.handle);
       if (!ignore_indirect_upgraded_textures && original_resource_view_to_mirrored_upgraded_resource_view != device_data.original_resource_views_to_mirrored_upgraded_resource_views.end())
       {
+         const auto original_resource_view_to_mirrored_upgraded_resource_view_ptr = original_resource_view_to_mirrored_upgraded_resource_view->second;
          lock.unlock(); // Avoids deadlock with the device
-         cmd_list->clear_render_target_view({ original_resource_view_to_mirrored_upgraded_resource_view->second }, color, rect_count, rects);
+         cmd_list->clear_render_target_view({ original_resource_view_to_mirrored_upgraded_resource_view_ptr }, color, rect_count, rects);
          return true;
       }
 
@@ -7974,13 +8043,21 @@ namespace
       auto original_resource_view_to_mirrored_upgraded_resource_view = device_data.original_resource_views_to_mirrored_upgraded_resource_views.find(uav.handle);
       if (!ignore_indirect_upgraded_textures && original_resource_view_to_mirrored_upgraded_resource_view != device_data.original_resource_views_to_mirrored_upgraded_resource_views.end())
       {
+         const auto original_resource_view_to_mirrored_upgraded_resource_view_ptr = original_resource_view_to_mirrored_upgraded_resource_view->second;
          lock.unlock(); // Avoids deadlock with the device
+#if DEVELOPMENT
+         ID3D11UnorderedAccessView* uav = (ID3D11UnorderedAccessView*)original_resource_view_to_mirrored_upgraded_resource_view_ptr;
+         D3D11_UNORDERED_ACCESS_VIEW_DESC desc;
+         uav->GetDesc(&desc);
+         ASSERT_ONCE(!IsIntFormat(desc.Format)); // UNORM/SNORM/SFLOAT/UFLOAT formats are all support with the UAV clear float functions, only INT/UINT formats are not
+#endif
+         // Use the float clearing function as all upgraded textures are float for the moment
          float upgraded_values[4];
          upgraded_values[0] = values[0]; // TODO: do these need to be converted from 0-255 to 0-1 or something?
          upgraded_values[1] = values[1];
          upgraded_values[2] = values[2];
          upgraded_values[3] = values[3];
-         cmd_list->clear_unordered_access_view_float({ original_resource_view_to_mirrored_upgraded_resource_view->second }, upgraded_values, rect_count, rects); // Use the float clearing function as all upgraded textures are R16G16B16A16_FLOAT at the moment
+         cmd_list->clear_unordered_access_view_float({ original_resource_view_to_mirrored_upgraded_resource_view_ptr }, upgraded_values, rect_count, rects);
          return true;
       }
 
@@ -8019,8 +8096,9 @@ namespace
       auto original_resource_view_to_mirrored_upgraded_resource_view = device_data.original_resource_views_to_mirrored_upgraded_resource_views.find(uav.handle);
       if (!ignore_indirect_upgraded_textures && original_resource_view_to_mirrored_upgraded_resource_view != device_data.original_resource_views_to_mirrored_upgraded_resource_views.end())
       {
+         const auto original_resource_view_to_mirrored_upgraded_resource_view_ptr = original_resource_view_to_mirrored_upgraded_resource_view->second;
          lock.unlock(); // Avoids deadlock with the device
-         cmd_list->clear_unordered_access_view_float({ original_resource_view_to_mirrored_upgraded_resource_view->second }, values, rect_count, rects);
+         cmd_list->clear_unordered_access_view_float({ original_resource_view_to_mirrored_upgraded_resource_view_ptr }, values, rect_count, rects);
          return true;
       }
 
@@ -8448,9 +8526,10 @@ namespace
             ID3D11Resource* source_resource = reinterpret_cast<ID3D11Resource*>(source.handle);
             ID3D11Resource* target_resource = reinterpret_cast<ID3D11Resource*>(dest.handle);
             DeviceData& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
-            const std::shared_lock lock(device_data.mutex);
+            std::shared_lock lock_device_read(device_data.mutex);
             if (enable_upgraded_texture_resource_copy_redirection && (device_data.upgraded_resources.contains(source.handle) || device_data.upgraded_resources.contains(dest.handle) || (swapchain_upgrade_type > SwapchainUpgradeType::None && (device_data.back_buffers.contains(source.handle) || device_data.back_buffers.contains(dest.handle)))))
             {
+               lock_device_read.unlock(); // Avoid deadlocks with device
                ASSERT_ONCE(AreResourcesEqual(source_resource, target_resource)); // Note: this might catch some false positives too
             }
          }
@@ -8465,6 +8544,7 @@ namespace
 
       OnCopyResource_Debug(cmd_list, source, dest);
 
+      // Indirect upgrades
       {
          bool any_replaced = false;
 
@@ -8478,35 +8558,58 @@ namespace
 
          if (any_replaced)
          {
-#if DEVELOPMENT || TEST
-            uint4 size1, size2;
-            DXGI_FORMAT format1, format2;
+            uint4 size1;
+            DXGI_FORMAT format1;
             GetResourceInfo(reinterpret_cast<ID3D11Resource*>(source.handle), size1, format1);
+#if DEVELOPMENT || TEST
+            uint4 size2;
+            DXGI_FORMAT format2;
             GetResourceInfo(reinterpret_cast<ID3D11Resource*>(dest.handle), size2, format2);
             ASSERT_ONCE(AreFormatsCopyCompatible(format1, format2));
+            
+            const reshade::api::resource_desc resource_desc = cmd_list->get_device()->get_resource_desc(source);
+            const bool is_depth = (resource_desc.usage & reshade::api::resource_usage::depth_stencil) != 0;
+            ASSERT_ONCE(!is_depth); // Depth textures are not supported here? Especially if they were upgraded or have stencil
 #endif
 
-            format = reshade::api::format::r16g16b16a16_float;
+            format = (reshade::api::format)format1; // Our upgrades "GetBestResourceUpgradeFormat()" are always non typeless so this is fine (this is the "view" format the MS resolve uses for the target and source textures)
             cmd_list->resolve_texture_region(source, source_subresource, source_box, dest, dest_subresource, dest_x, dest_y, dest_z, format);
             return true;
          }
       }
 
+      // Direct upgrades
       if (source_subresource == 0 && dest_subresource == 0 && (!source_box || (source_box->left == 0 && source_box->top == 0)) && (dest_x == 0 && dest_y == 0 && dest_z == 0)) // No need to check if the texture is 2D here as "ResolveSubresource" (MS) can only be used on 2D textures
       {
-         ID3D11Resource* source_resource = reinterpret_cast<ID3D11Resource*>(source.handle);
-         ID3D11Resource* target_resource = reinterpret_cast<ID3D11Resource*>(dest.handle);
-         DeviceData& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
-         // If any of the resources has been upgraded but the format specified by the game doesn't match, enforce the right format
-         if ((device_data.upgraded_resources.contains(source.handle) || device_data.upgraded_resources.contains(dest.handle) || (swapchain_upgrade_type > SwapchainUpgradeType::None && device_data.back_buffers.contains(dest.handle))) && DXGI_FORMAT(format) != DXGI_FORMAT_R16G16B16A16_FLOAT)
          {
-            if (AreResourcesEqual(source_resource, target_resource, true, false))
+            ID3D11Resource* source_resource = reinterpret_cast<ID3D11Resource*>(source.handle);
+            ID3D11Resource* target_resource = reinterpret_cast<ID3D11Resource*>(dest.handle);
+            DeviceData& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+            std::shared_lock lock_device_read(device_data.mutex);
+            // If any of the resources has been upgraded but the format specified by the game doesn't match, enforce the right format
+            if (device_data.upgraded_resources.contains(source.handle) || device_data.upgraded_resources.contains(dest.handle) || (swapchain_upgrade_type > SwapchainUpgradeType::None && device_data.back_buffers.contains(dest.handle)))
             {
-               ID3D11DeviceContext* native_device_context = (ID3D11DeviceContext*)(cmd_list->get_native());
-               native_device_context->ResolveSubresource(target_resource, dest_subresource, source_resource, source_subresource, DXGI_FORMAT_R16G16B16A16_FLOAT);
-               return true;
+               lock_device_read.unlock(); // Avoid deadlocks with device
+
+#if DEVELOPMENT || TEST
+               const reshade::api::resource_desc resource_desc = cmd_list->get_device()->get_resource_desc(source);
+               const bool is_depth = (resource_desc.usage & reshade::api::resource_usage::depth_stencil) != 0;
+               ASSERT_ONCE(!is_depth); // Depth textures are not supported here? Especially if they were upgraded or have stencil
+#endif
+               uint4 size1;
+               DXGI_FORMAT format1;
+               GetResourceInfo(reinterpret_cast<ID3D11Resource*>(source.handle), size1, format1);
+
+               if (DXGI_FORMAT(format) != format1 && AreResourcesEqual(source_resource, target_resource, true, false))
+               {
+                  format = (reshade::api::format)format1;
+                  ID3D11DeviceContext* native_device_context = (ID3D11DeviceContext*)(cmd_list->get_native());
+                  native_device_context->ResolveSubresource(target_resource, dest_subresource, source_resource, source_subresource, format1);
+                  return true;
+               }
             }
          }
+
          return OnCopyResource_Internal(cmd_list, source, dest, DXGI_FORMAT(format));
       }
 #if DEVELOPMENT
@@ -8517,9 +8620,10 @@ namespace
             ID3D11Resource* source_resource = reinterpret_cast<ID3D11Resource*>(source.handle);
             ID3D11Resource* target_resource = reinterpret_cast<ID3D11Resource*>(dest.handle);
             DeviceData& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
-            const std::shared_lock lock(device_data.mutex);
+            std::shared_lock lock_device_read(device_data.mutex);
             if (enable_upgraded_texture_resource_copy_redirection && (device_data.upgraded_resources.contains(source.handle) || device_data.upgraded_resources.contains(dest.handle) || (swapchain_upgrade_type > SwapchainUpgradeType::None && (device_data.back_buffers.contains(source.handle) || device_data.back_buffers.contains(dest.handle)))))
             {
+               lock_device_read.unlock(); // Avoid deadlocks with device
                ASSERT_ONCE(AreResourcesEqual(source_resource, target_resource)); // Note: this might catch some false positives too
             }
          }
@@ -10205,7 +10309,7 @@ namespace
                                           bool upgraded = false;
                                           {
                                              const std::shared_lock lock(device_data.mutex);
-                                             // TODO: store this information in the trace list, it might expire otherwise, or even be incorrect if ptrs were re-used
+                                             // TODO: store this information in the trace list, it might expire otherwise, or even be incorrect if ptrs were re-used. Also this info isn't shown if we use indirect texture upgrades.
                                              for (auto upgraded_resource_pair : device_data.original_upgraded_resources_formats)
                                              {
                                                 void* upgraded_resource_ptr = reinterpret_cast<void*>(upgraded_resource_pair.first);
@@ -10220,9 +10324,10 @@ namespace
                                                       const auto& [native_resource, original_view_format] = it->second;
                                                       ASSERT_ONCE(native_resource == upgraded_resource_pair.first); // Uh!?
 
+                                                      DXGI_FORMAT upgraded_view_format = draw_call_data.srv_format[i]; // This only works with direct upgrades, otherwise it'd be the original view format
                                                       // If the game already tried to create a view in the upgraded format, it means it simply read the format from the upgraded texture,
                                                       // and thus we can assume the original format would have been the same as the original texture (or anyway the most obvious non typeless version of it)
-                                                      DXGI_FORMAT adjusted_original_view_format = (DXGI_FORMAT(original_view_format) == DXGI_FORMAT_R16G16B16A16_FLOAT) ? DXGI_FORMAT(upgraded_resource_pair.second) : DXGI_FORMAT(original_view_format);
+                                                      DXGI_FORMAT adjusted_original_view_format = (DXGI_FORMAT(original_view_format) == upgraded_view_format) ? DXGI_FORMAT(upgraded_resource_pair.second) : DXGI_FORMAT(original_view_format);
 
                                                       ImGui::Text("RV Original Format: %s", GetFormatName(adjusted_original_view_format));
                                                       // TODO: if the native texture format is TYPELESS, don't send this warning? Alternatively keep track of how the resource was last used (with what view it was written to, if any), and base the state off of that,
@@ -10350,7 +10455,8 @@ namespace
                                                    {
                                                       const auto& [native_resource, original_view_format] = it->second;
                                                       ASSERT_ONCE(native_resource == upgraded_resource_pair.first); // Uh!?
-                                                      DXGI_FORMAT adjusted_original_view_format = (DXGI_FORMAT(original_view_format) == DXGI_FORMAT_R16G16B16A16_FLOAT) ? DXGI_FORMAT(upgraded_resource_pair.second) : DXGI_FORMAT(original_view_format);
+                                                      DXGI_FORMAT upgraded_view_format = draw_call_data.uav_format[i]; // This only works with direct upgrades, otherwise it'd be the original view format
+                                                      DXGI_FORMAT adjusted_original_view_format = (DXGI_FORMAT(original_view_format) == upgraded_view_format) ? DXGI_FORMAT(upgraded_resource_pair.second) : DXGI_FORMAT(original_view_format);
                                                       ImGui::Text("RV Original Format: %s", GetFormatName(adjusted_original_view_format));
                                                       if (IsLinearFormat(DXGI_FORMAT(upgraded_resource_pair.second)) != IsLinearFormat(adjusted_original_view_format))
                                                       {
@@ -10493,6 +10599,7 @@ namespace
                                           ImGui::Text("RV Mip: %u", draw_call_data.rtv_mip[i]);
                                           ImGui::Text("RV Size: %ux%ux%u", rtv_size.x, rtv_size.y, rtv_size.z);
                                           bool upgraded = false;
+                                          bool indirect_upgraded = false;
                                           {
                                              const std::shared_lock lock(device_data.mutex);
                                              // TODO: this is missing the "R is UAV" print
@@ -10510,7 +10617,8 @@ namespace
                                                    {
                                                       const auto& [native_resource, original_view_format] = it->second;
                                                       ASSERT_ONCE(native_resource == upgraded_resource_pair.first); // Uh!?
-                                                      DXGI_FORMAT adjusted_original_view_format = (DXGI_FORMAT(original_view_format) == DXGI_FORMAT_R16G16B16A16_FLOAT) ? DXGI_FORMAT(upgraded_resource_pair.second) : DXGI_FORMAT(original_view_format);
+                                                      DXGI_FORMAT upgraded_view_format = draw_call_data.rtv_format[i]; // This only works with direct upgrades, otherwise it'd be the original view format
+                                                      DXGI_FORMAT adjusted_original_view_format = (DXGI_FORMAT(original_view_format) == upgraded_view_format) ? DXGI_FORMAT(upgraded_resource_pair.second) : DXGI_FORMAT(original_view_format);
                                                       ImGui::Text("RV Original Format: %s", GetFormatName(adjusted_original_view_format));
                                                       if (IsLinearFormat(DXGI_FORMAT(upgraded_resource_pair.second)) != IsLinearFormat(adjusted_original_view_format))
                                                       {
@@ -10532,6 +10640,7 @@ namespace
                                                 {
                                                    ImGui::Text("R: Indirect Upgraded");
                                                    upgraded = true;
+                                                   indirect_upgraded = true;
                                                    break;
                                                 }
                                              }
@@ -10541,8 +10650,9 @@ namespace
                                           // Blend mode
                                           {
                                              bool pop_text_style_color = false;
-                                             // Print out invalid blend modes. We assume "R16G16B16A16_FLOAT" if "upgraded" is true (indirect upgrades).
-                                             if (IsRGBAFormat(draw_call_data.rtv_format[i], true) && (upgraded || IsSignedFloatFormat(draw_call_data.rtv_format[i])) && IsBlendInverted(draw_call_data.blend_desc, 1, false, i))
+                                             // Print out invalid blend modes.
+                                             // Note: this is assuming that indirect upgrades always upgrade to a signed float type, which is generally true. Ideally we'd implement something like "GetBestResourceViewUpgradeFormat(draw_call_data.rtv_format[i])" here, but given it's just a warning, it doesn't really matter
+                                             if (IsRGBAFormat(draw_call_data.rtv_format[i], true) && (indirect_upgraded || IsSignedFloatFormat(draw_call_data.rtv_format[i])) && IsBlendInverted(draw_call_data.blend_desc, 1, false, i))
                                              {
                                                 ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 105, 0, 255)); // Orange
                                                 pop_text_style_color = true;
@@ -10837,7 +10947,7 @@ namespace
 
                                           ImGui::Text("");
                                           ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(190, 160, 120, 255)); // Faint Brown
-                                          ImGui::Text("Depth");
+                                          ImGui::Text("Depth/Stencil");
                                           ImGui::PopStyleColor();
                                           ImGui::Text("R Hash: %s", draw_call_data.ds_hash.c_str());
                                           if (!draw_call_data.ds_debug_name.empty())
@@ -11599,11 +11709,18 @@ namespace
                   int index = 0;
                   const std::shared_lock lock(device_data.mutex); // Note: this is probably not 100% safe, as we don't keep the resources as a com ptr, DX might destroy them as we iterate the array, but this is debug code so, whatever!
 
+                  // TODO: add all resources (textures), including non upgraded ones, swapchain (we couldn't draw debug that one!) etc
                   std::unordered_set<uint64_t> upgraded_resources = device_data.upgraded_resources;
                   for (const auto& original_resource_to_mirrored_upgraded_resource : device_data.original_resources_to_mirrored_upgraded_resources)
                   {
                      upgraded_resources.insert(original_resource_to_mirrored_upgraded_resource.second);
                   }
+                  // Add swapchain buffers too!
+                  for (const auto& back_buffer : device_data.back_buffers)
+                  {
+                     upgraded_resources.insert(back_buffer);
+                  }
+
                   for (const auto upgraded_resource : upgraded_resources)
                   {
                      if (upgraded_resource == 0)
@@ -11618,8 +11735,13 @@ namespace
 
                      auto text_color = IM_COL32(255, 255, 255, 255); // White
 
-                     bool direct_upgraded = device_data.upgraded_resources.contains(upgraded_resource); // TODO: add all resources (textures), including non upgraded ones, swapchain (we couldn't draw debug that one!) etc
-                     if (direct_upgraded)
+                     bool swapchain = device_data.back_buffers.contains(upgraded_resource);
+                     bool direct_upgraded = device_data.upgraded_resources.contains(upgraded_resource) || swapchain;
+                     if (swapchain)
+                     {
+                        text_color = IM_COL32(0, 0, 255, 255); // Blue
+                     }
+                     else if (direct_upgraded)
                      {
                         text_color = IM_COL32(0, 255, 0, 255); // Green
                      }
@@ -11628,9 +11750,20 @@ namespace
                         text_color = IM_COL32(12, 255, 12, 255); // Some Green
                      }
 
-                     std::string name = std::to_string(std::hash<void*>{}(native_resource.get()));
+                     std::string hash = std::to_string(std::hash<void*>{}(native_resource.get()));
+                     std::string name = hash;
 
-                     const bool is_highlighted_resource = highlighted_resource == name;
+                     // Redirect the hash
+                     for (const auto& original_resource_to_mirrored_upgraded_resource : device_data.original_resources_to_mirrored_upgraded_resources)
+                     {
+                        if (original_resource_to_mirrored_upgraded_resource.second == uint64_t(selected_resource.get()))
+                        {
+                           hash = std::to_string(std::hash<void*>{}((void*)original_resource_to_mirrored_upgraded_resource.first));
+                           break;
+                        }
+                     }
+
+                     const bool is_highlighted_resource = highlighted_resource == hash;
                      if (is_highlighted_resource)
                      {
                         text_color = IM_COL32(255, 0, 0, 255); // Red
@@ -11676,19 +11809,45 @@ namespace
                   std::string hash = std::to_string(std::hash<void*>{}(selected_resource.get()));
                   ImGui::Text("Hash: %s", hash.c_str());
 
+                  bool swapchain = false;
+                  bool indirect_upgrade = false;
+
+                  // Replace the hash with the original one if this is an indirect upgrade
+                  {
+                     std::shared_lock lock(device_data.mutex); // Note: this is probably not 100% safe, as we don't keep the resources as a com ptr, DX might destroy them as we iterate the array, but this is debug code so, whatever!
+                  
+                     swapchain = device_data.back_buffers.contains(uint64_t(selected_resource.get()));
+
+                     // Redirect the hash to the indirect texture
+                     for (const auto& original_resource_to_mirrored_upgraded_resource : device_data.original_resources_to_mirrored_upgraded_resources)
+                     {
+                        if (original_resource_to_mirrored_upgraded_resource.second == uint64_t(selected_resource.get()))
+                        {
+                           lock.unlock();
+
+                           hash = std::to_string(std::hash<void*>{}((void*)original_resource_to_mirrored_upgraded_resource.first));
+                           ImGui::Text("Original Hash: %s", hash.c_str());
+                           indirect_upgrade = true;
+
+                           break;
+                        }
+                     }
+                  }
+
                   std::optional<std::string> debug_name = GetD3DNameW(selected_resource.get());
                   if (debug_name.has_value())
                   {
                      ImGui::Text("Debug Name: %s", debug_name.value().c_str());
                   }
 
-                  ImGui::Text("Upgraded: %s", "True"); // If it's here, it's upgraded for now
+                  // If it's here, it's always upgraded for now
+                  ImGui::Text("Upgrade Type: %s", indirect_upgrade ? "Indirect" : "Direct");
 
                   bool debug_draw_resource_enabled = device_data.debug_draw_texture == selected_resource;
                   UINT extra_refs = 1; // Our current local ref.
                   if (debug_draw_resource_enabled) extra_refs++; // The debug draw ref
                   // Note: there possibly might be more, spread into render targets (actually they don't seem to add references?), SRVs etc, that we set ourselves, but it's hard, but it might actually be correct already.
-                  // ReShade doesn't seem to keep textures with hard refences, instead they add private data with a destructor to them, to detect when they are being garbage collected, and anyway it doesn't see the resources we created.
+                  // ReShade doesn't seem to keep textures with hard references, instead they add private data with a destructor to them, to detect when they are being garbage collected, and anyway it doesn't see the resources we created.
 
                   ImGui::Text("Reference Count: %lu", selected_resource.ref_count() - (unsigned long)(extra_refs));
 
@@ -11743,13 +11902,15 @@ namespace
 
                   ImGui::Text("Size: %ux%ux%ux%u", selected_texture_size.x, selected_texture_size.y, selected_texture_size.z, selected_texture_size.w);
 
+                  // Works on direct and indirect upgrades!
                   const bool is_highlighted_resource = highlighted_resource == hash;
                   if (is_highlighted_resource ? ImGui::Button("Unhighlight Resource") : ImGui::Button("Highlight Resource"))
                   {
                      highlighted_resource = is_highlighted_resource ? "" : hash;
                   }
 
-                  if (debug_draw_resource_enabled ? ImGui::Button("Disable Debug Draw Texture") : ImGui::Button("Debug Draw Texture"))
+                  // Hide debug draw for the swapchain, given we'd already be looking at it (and it's likely not possible to debug it anyway, unless we had two textures, but DX11 only has 1)
+                  if (!swapchain && (debug_draw_resource_enabled ? ImGui::Button("Disable Debug Draw Texture") : ImGui::Button("Debug Draw Texture")))
                   {
                      ASSERT_ONCE(GetShaderDefineCompiledNumericalValue(DEVELOPMENT_HASH) >= 1); // Development flag is needed in shaders for this to output correctly
                      ASSERT_ONCE(device_data.native_pixel_shaders[CompileTimeStringHash("Display Composition")]); // This shader is necessary to draw this debug stuff

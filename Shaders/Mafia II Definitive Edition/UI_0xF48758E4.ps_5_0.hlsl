@@ -6,6 +6,7 @@ cbuffer _Globals : register(b0)
 SamplerState Tex_sampler_s : register(s0);
 Texture2D<float4> Tex : register(t0);
 
+// Exclusively runs on boot (it seems)
 void main(
   float4 v0 : SV_Position0,
   float2 v1 : TEXCOORD0,

@@ -100,7 +100,7 @@ void main(
   if (!forceVanillaSDR && LumaSettings.DisplayMode == 1)
   {
     float normalizationPoint = 0.025; // Found empyrically
-    float fakeHDRIntensity = 0.2;
+    float fakeHDRIntensity = 0.125; // The game clips a bit with this, so don't go too high. We could lower this further too.
     float saturationExpansionIntensity = 0.1;
 #if DEVELOPMENT && 0 // TODO: tweak defaults
     fakeHDRIntensity = DVS4;

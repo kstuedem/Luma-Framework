@@ -908,6 +908,7 @@ namespace Shader
       }
    }
 
+   // Note: apparently FXC isn't thread safe so ideally we should only ever access it from one thread at any given time
    void CompileShaderFromFile(std::vector<uint8_t>& output, const CComPtr<ID3DBlob>& optional_uncompiled_code_input, LPCWSTR file_path, LPCSTR shader_target, const std::vector<std::string>& defines = {}, bool save_to_disk = false, bool& error = dummy_bool, std::string* out_error = nullptr, LPCWSTR file_write_path = nullptr, LPCSTR func_name = nullptr)
    {
       std::vector<D3D_SHADER_MACRO> local_defines;

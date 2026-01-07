@@ -1,5 +1,15 @@
+#include "../Includes/Common.hlsl"
+
 #ifndef ENABLE_BLOOM
 #define ENABLE_BLOOM 1
+#endif
+
+#ifndef IMPROVED_COLOR_GRADING_TYPE
+#define IMPROVED_COLOR_GRADING_TYPE 2
+#endif
+
+#ifndef ENABLE_COLOR_GRADING
+#define ENABLE_COLOR_GRADING 1
 #endif
 
 cbuffer _Globals : register(b0)
@@ -38,10 +48,21 @@ void main(
 
   float4 someColorFactor = 1.0 - (invSceneColor * invBloomColor + emulatedSceneColor);
 
-  float r1x = bloomColor.x - bloomColor.z; // Red - Blue???
-  r1x = r1x * 100 + 0.5;
+  float warmness = bloomColor.x - bloomColor.z; // Red - Blue???
+  warmness = warmness * 100 + 0.5;
+  float Intensity = IntensityWarmCol.x;
+  float3 WarmCol = IntensityWarmCol.yzw;
   float4 bloomFilter = 1.0;
-  bloomFilter.xyz = IntensityWarmCol.x * (r1x * (-ColdCol.xyz + IntensityWarmCol.yzw) + ColdCol.xyz);
+#if ENABLE_COLOR_GRADING
+  bloomFilter.xyz = Intensity * lerp(ColdCol.xyz, WarmCol.xyz, warmness);
+#else
+  bloomFilter.xyz = Intensity * average((ColdCol.xyz + WarmCol.xyz) * 0.5);
+#endif
+
+#if IMPROVED_COLOR_GRADING_TYPE >= 4 && 0 // Nah
+  // Slightly reduce bloom intensity as it was overkill
+  someColorFactor *= 0.8;
+#endif
 
 #if ENABLE_BLOOM
   o0.xyzw = sceneColor + (bloomFilter.xyzw * someColorFactor);

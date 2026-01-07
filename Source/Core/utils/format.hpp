@@ -599,6 +599,42 @@ namespace
       }
       return false;
    }
+   
+   bool IsIntFormat(DXGI_FORMAT format)
+   {
+      switch (format)
+      {
+      case DXGI_FORMAT_R32G32B32A32_UINT:
+      case DXGI_FORMAT_R32G32B32A32_SINT:
+      case DXGI_FORMAT_R32G32B32_UINT:
+      case DXGI_FORMAT_R32G32B32_SINT:
+      case DXGI_FORMAT_R16G16B16A16_UINT:
+      case DXGI_FORMAT_R16G16B16A16_SINT:
+      case DXGI_FORMAT_R32G32_UINT:
+      case DXGI_FORMAT_R32G32_SINT:
+      case DXGI_FORMAT_X32_TYPELESS_G8X24_UINT:
+      case DXGI_FORMAT_R10G10B10A2_UINT:
+      case DXGI_FORMAT_R8G8B8A8_UINT:
+      case DXGI_FORMAT_R8G8B8A8_SINT:
+      case DXGI_FORMAT_R16G16_UINT:
+      case DXGI_FORMAT_R16G16_SINT:
+      case DXGI_FORMAT_R32_UINT:
+      case DXGI_FORMAT_R32_SINT:
+      case DXGI_FORMAT_X24_TYPELESS_G8_UINT:
+      case DXGI_FORMAT_R8G8_UINT:
+      case DXGI_FORMAT_R8G8_SINT:
+      case DXGI_FORMAT_R16_UINT:
+      case DXGI_FORMAT_R16_SINT:
+      case DXGI_FORMAT_R8_UINT:
+      case DXGI_FORMAT_R8_SINT:
+         return true;
+      // Partial int (stencil) depth formats
+      case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+      case DXGI_FORMAT_D24_UNORM_S8_UINT:
+         return false;
+      }
+      return false;
+   }
 
    bool IsTypelessFormat(DXGI_FORMAT format)
    {

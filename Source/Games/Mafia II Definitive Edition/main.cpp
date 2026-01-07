@@ -59,6 +59,8 @@ public:
          {"ENABLE_HDR_BOOST", '1', true, false, "Enable a \"Fake\" HDR boosting effect (applies to videos too).", 1},
          {"IMPROVED_COLOR_GRADING_TYPE", '2', true, false, "0 - Vanilla\n1 - Modernizes the color grading logic (e.g. running in linear space, avoids quality loss from math etc)\n2 - Same as 1, but also expands gamut (working in BT.2020)\n3 - Lowers the color grading strengths and expands the dynamic range (less raised blacks, though they were used to simulate ambient lighting so it might not always look right)\n4 - Fully expanded dynamic range (similar to 3 but stronger)", 4},
          {"ENABLE_BLOOM", '1', true, false, "Allows disabling the game's bloom effects.", 1},
+         {"ENABLE_DEPTH_OF_FIELD", '1', true, false, "Allows disabling the game's depth of effect.", 1},
+         {"ENABLE_MOTION_BLUR", '1', true, false, "Allows disabling the game's motion blur effect.", 1},
          {"ENABLE_COLOR_GRADING", '1', true, false, "Allows disabling the game's color grading effects.", 1},
          {"DISABLE_BLACK_BARS", '1', true, false, "Disable black bars around 16:9 during cutscenes (useful for ultrawide).", 1},
          {"FORCE_BT709_VIDEOS", '1', true, false, "Corrects videos color space, decoding them as BT.709 instead of BT.601. This is mostly noticeable in reds, producing better skin tones.\nIt's not 100% guaranteed the fix is correct so it's optional.", 1},
@@ -333,13 +335,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             // Unused
             reshade::api::format::r11g11b10_float,
       };
+      // Depth in Mafia II was 24 bits but exhibited some z-fighting, this partially fixes it
+      texture_depth_upgrade_formats = {
+            reshade::api::format(DXGI_FORMAT_D24_UNORM_S8_UINT),
+      };
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
 #if 1 // Seemingly not necessary
       enable_indirect_texture_format_upgrades = true;
       enable_automatic_indirect_texture_format_upgrades = true;
 #endif
       prevent_fullscreen_state = true;
-      // Game uses DPI scale when reading the resolutions from Windows (meaning DPI affects them), the only way to play in the native borderless res is windowed mode, or start the game with DPI 1 // TODO: check if that affects FSE, maybe we shouldn't prevent it
+      // Game uses DPI scale when reading the resolutions from Windows (meaning DPI affects them), the only way to play in the native borderless res is windowed mode, or start the game with DPI 1.0. Actually FSE doesn't seem affected by the issue, at least not with this flag on.
       force_borderless = true;
       force_ignore_dpi = true;
 
