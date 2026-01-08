@@ -165,7 +165,7 @@ cbuffer _Globals : register(b0)
 #endif
 }
 
-Texture2D<float> s040_DepthTexture : register(t0); // TODO: this might also be a motion vectors mask?
+Texture2D<float> s040_DepthTexture : register(t0);
 SamplerState s040_DepthTexture_sampler_s : register(s0);
 Texture2D<float4> s050_PostProcessSrcTexture : register(t8);
 SamplerState s050_PostProcessSrcTexture_sampler_s : register(s8);

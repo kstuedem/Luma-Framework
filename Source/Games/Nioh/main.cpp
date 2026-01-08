@@ -20,12 +20,14 @@ namespace
    bool first_frame_draw_call = true;
    bool playing_video = false;
    bool has_drawn_post_process = false;
+   int final_post_process_copy_draws = 0;
+   constexpr size_t max_final_post_process_copy_draws = 3; // Probably wouldn't need more than 2 ever
 
    com_ptr<ID3D11DepthStencilView> main_dsv;
-   com_ptr<ID3D11RenderTargetView> post_process_rtv;
-   com_ptr<ID3D11RenderTargetView> upgraded_post_process_rtv;
-   com_ptr<ID3D11ShaderResourceView> upgraded_post_process_srv;
-   com_ptr<ID3D11Texture2D> upgraded_post_process_texture_2d;
+   com_ptr<ID3D11RenderTargetView> post_process_rtvs[max_final_post_process_copy_draws];
+   com_ptr<ID3D11RenderTargetView> upgraded_post_process_rtvs[max_final_post_process_copy_draws];
+   com_ptr<ID3D11ShaderResourceView> upgraded_post_process_srvs[max_final_post_process_copy_draws];
+   com_ptr<ID3D11Texture2D> upgraded_post_process_textures_2d[max_final_post_process_copy_draws];
 
    bool upgrade_materials_samplers = true;
 }
@@ -99,7 +101,7 @@ public:
       // __smpsNMap   3
       // __smpsLit    4
       // However, materials vary and the order can change between them.
-      // Given that there's seemengly not much that should avoid doing Anisotropic filtering during materials drawing,
+      // Given that there's seemingly not much that should avoid doing Anisotropic filtering during materials drawing,
       // we upgrade all of them to it. It's possible that this breaks some material effects but I doubt it,
       // given the game materials are simple and have minimal effects, especially in the g-buffer drawing phase.
       // Note that this can increase shimmering (game has no AA by default nor TAA (Luma adds FXAA))
@@ -146,7 +148,7 @@ public:
       }
 
       // In UW, at least at high resolutions, the game wouldn't go beyond 4k 16:9, and thus the final post process would lose half of the quality
-      if (!has_drawn_post_process && original_shader_hashes.Contains(shader_hashes_PostProcessEncode))
+      if (original_shader_hashes.Contains(shader_hashes_PostProcessEncode))
       {
          has_drawn_post_process = true;
 
@@ -158,7 +160,7 @@ public:
          DXGI_FORMAT format;
          GetResourceInfo(rtv.get(), size, format);
 
-         if (rtv.get() && rtv.get() != post_process_rtv && (size.x != uint(device_data.output_resolution.x + 0.5f) || size.y != uint(device_data.output_resolution.y + 0.5f)))
+         if (rtv.get() && rtv.get() != post_process_rtvs[final_post_process_copy_draws] && (size.x != uint(device_data.output_resolution.x + 0.5f) || size.y != uint(device_data.output_resolution.y + 0.5f)))
          {
             D3D11_VIEWPORT viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
             UINT viewports_num = 1;
@@ -191,19 +193,19 @@ public:
                      srv_desc.Texture2D.MipLevels = 1;
                      srv_desc.Texture2D.MostDetailedMip = 0;
 
-                     upgraded_post_process_texture_2d = nullptr;
-                     upgraded_post_process_rtv = nullptr;
-                     upgraded_post_process_srv = nullptr;
-                     native_device->CreateTexture2D(&texture_2d_desc, nullptr, &upgraded_post_process_texture_2d); // This is never read back as an SRV so it should be fine
-                     native_device->CreateRenderTargetView(upgraded_post_process_texture_2d.get(), &rtv_desc, &upgraded_post_process_rtv);
-                     native_device->CreateShaderResourceView(upgraded_post_process_texture_2d.get(), &srv_desc, &upgraded_post_process_srv);
+                     upgraded_post_process_textures_2d[final_post_process_copy_draws] = nullptr;
+                     upgraded_post_process_rtvs[final_post_process_copy_draws] = nullptr;
+                     upgraded_post_process_srvs[final_post_process_copy_draws] = nullptr;
+                     native_device->CreateTexture2D(&texture_2d_desc, nullptr, &upgraded_post_process_textures_2d[final_post_process_copy_draws]); // This is never read back as an SRV so it should be fine
+                     native_device->CreateRenderTargetView(upgraded_post_process_textures_2d[final_post_process_copy_draws].get(), &rtv_desc, &upgraded_post_process_rtvs[final_post_process_copy_draws]);
+                     native_device->CreateShaderResourceView(upgraded_post_process_textures_2d[final_post_process_copy_draws].get(), &srv_desc, &upgraded_post_process_srvs[final_post_process_copy_draws]);
 
-                     post_process_rtv = rtv;
+                     post_process_rtvs[final_post_process_copy_draws] = rtv;
                   }
                }
             }
          }
-         if (rtv.get() && rtv.get() == post_process_rtv && test_index != 12)
+         if (rtv.get() && rtv.get() == post_process_rtvs[final_post_process_copy_draws] && test_index != 12)
          {
             D3D11_VIEWPORT viewport;
             viewport.TopLeftX = 0.f;
@@ -220,16 +222,19 @@ public:
             // The game always makes one for the scene rendering and one for the UI, both are cleared immediately after this pass (and the scene one again as the next frame starts), but the UI one was hardcoded to 16:9, like the UI passes, so it was smaller in UW.
             dsv = dsv ? main_dsv : nullptr;
 
-            ID3D11RenderTargetView* upgraded_post_process_rtv_const = upgraded_post_process_rtv.get();
+            ID3D11RenderTargetView* upgraded_post_process_rtv_const = upgraded_post_process_rtvs[final_post_process_copy_draws].get();
             native_device_context->OMSetRenderTargets(1, &upgraded_post_process_rtv_const, dsv.get());
          }
          else
          {
-            post_process_rtv = nullptr;
-            upgraded_post_process_texture_2d = nullptr;
-            upgraded_post_process_rtv = nullptr;
-            upgraded_post_process_srv = nullptr;
+            post_process_rtvs[final_post_process_copy_draws] = nullptr;
+            upgraded_post_process_textures_2d[final_post_process_copy_draws] = nullptr;
+            upgraded_post_process_rtvs[final_post_process_copy_draws] = nullptr;
+            upgraded_post_process_srvs[final_post_process_copy_draws] = nullptr;
          }
+
+         final_post_process_copy_draws++;
+         ASSERT_ONCE(final_post_process_copy_draws <= max_final_post_process_copy_draws); // Unsupported, we need to increase arrays like "post_process_rtvs" to support it! I don't think the game ever does 2 of these passes!
       }
       // Refresh the rtv and viewport.
       // This should exclusively be the UI.
@@ -240,13 +245,16 @@ public:
       // it's possibly nobody noticed the resolution would have been halved before.
       // So, above we scale the backbuffer to full resolution, and here we force draw the UI in 16:9.
       // We assume the same behaviour would happen at 4:3 etc, but it's untested.
+      // 
+      // Note: if there's more than one of these ("final_post_process_copy_draws" > 1), take the last, as that's what seems like the game uses as RT, while the previous one is a copy for UI custom usage.
+      // 
       // TODO: some of the UI that is mapped to the world is stretched in UW (it seems like the issues is in the vertices, so we can't fix it by detecting data in the shaders, everything is the same as the other 2D UI shaders)
-      else if (has_drawn_post_process && upgraded_post_process_rtv)
+      else if (has_drawn_post_process && upgraded_post_process_rtvs[final_post_process_copy_draws-1])
       {
          com_ptr<ID3D11RenderTargetView> rtv;
          com_ptr<ID3D11DepthStencilView> dsv;
          native_device_context->OMGetRenderTargets(1, &rtv, &dsv);
-         if (rtv && (rtv == post_process_rtv || rtv == upgraded_post_process_rtv))
+         if (rtv && (rtv == post_process_rtvs[final_post_process_copy_draws-1] || rtv == upgraded_post_process_rtvs[final_post_process_copy_draws-1]))
          {
             D3D11_VIEWPORT viewport;
             viewport.MinDepth = 0.f;
@@ -263,14 +271,17 @@ public:
 
             dsv = dsv ? main_dsv : nullptr;
 
-            ID3D11RenderTargetView* upgraded_post_process_rtv_const = upgraded_post_process_rtv.get();
+            ID3D11RenderTargetView* upgraded_post_process_rtv_const = upgraded_post_process_rtvs[final_post_process_copy_draws-1].get();
             native_device_context->OMSetRenderTargets(1, &upgraded_post_process_rtv_const, dsv.get());
          }
       }
 
-      if (original_shader_hashes.Contains(shader_hashes_SwapchainCopy))
+      bool is_swapchain_copy = original_shader_hashes.Contains(shader_hashes_SwapchainCopy);
+      bool is_ui = original_shader_hashes.Contains(shader_hashes_UI);
+
+      if (is_swapchain_copy || is_ui)
       {
-         if (is_custom_pass)
+         if (is_swapchain_copy && is_custom_pass)
          {
             SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaSettings);
             SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData, playing_video ? 1 : 0); // Set custom data to 1 to highlight it's a video and do aspect ratio scaling.
@@ -278,21 +289,35 @@ public:
             updated_cbuffers = true;
          }
 
-         if (has_drawn_post_process && upgraded_post_process_srv)
+         int i = 0;
+         // If we made two copies before, the UI would read back the first one, while the swapchain copy the second one
+         if (final_post_process_copy_draws >= 2)
+            i = is_ui ? 0 : (final_post_process_copy_draws-1);
+         if (has_drawn_post_process && upgraded_post_process_srvs[i])
          {
-            ID3D11ShaderResourceView* const upgraded_post_process_srv_const = upgraded_post_process_srv.get();
-            native_device_context->PSSetShaderResources(0, 1, &upgraded_post_process_srv_const);
+            com_ptr<ID3D11ShaderResourceView> ui_srv;
+            native_device_context->PSGetShaderResources(0, 1, &ui_srv);
 
-            // The viewport was probably already fullscreen here, but let's force it anyway
-            D3D11_VIEWPORT viewport;
-            viewport.TopLeftX = 0.f;
-            viewport.TopLeftY = 0.f;
-            viewport.MinDepth = 0.f;
-            viewport.MaxDepth = 1.f;
-            viewport.Width = device_data.output_resolution.x;
-            viewport.Height = device_data.output_resolution.y;
-            native_device_context->RSSetViewports(1, &viewport);
-            native_device_context->RSSetScissorRects(0, nullptr);
+            // The UI re-uses the same shader for a lot of stuff, make sure the texture matches the original one!
+            if (!is_ui || AreViewsOfSameResource(ui_srv.get(), post_process_rtvs[i].get()))
+            {
+               ID3D11ShaderResourceView* const upgraded_post_process_srv_const = upgraded_post_process_srvs[i].get();
+               native_device_context->PSSetShaderResources(0, 1, &upgraded_post_process_srv_const);
+            }
+
+            if (is_swapchain_copy)
+            {
+               // The viewport was probably already fullscreen here, but let's force it anyway
+               D3D11_VIEWPORT viewport;
+               viewport.TopLeftX = 0.f;
+               viewport.TopLeftY = 0.f;
+               viewport.MinDepth = 0.f;
+               viewport.MaxDepth = 1.f;
+               viewport.Width = device_data.output_resolution.x;
+               viewport.Height = device_data.output_resolution.y;
+               native_device_context->RSSetViewports(1, &viewport);
+               native_device_context->RSSetScissorRects(0, nullptr);
+            }
          }
       }
 
@@ -306,11 +331,25 @@ public:
          main_dsv = nullptr;
       }
 
+      // Clear all non first post process texture copies,
+      // because we might not have a chance to null them after, and we'd keep a reference forever,
+      // so it's simply better to re-create them every frame, especially because this only happens outside of gameplay.
+      // This shouldn't ever crash.
+      while (final_post_process_copy_draws > 1)
+      {
+         post_process_rtvs[final_post_process_copy_draws-1] = nullptr;
+         upgraded_post_process_textures_2d[final_post_process_copy_draws-1] = nullptr;
+         upgraded_post_process_rtvs[final_post_process_copy_draws-1] = nullptr;
+         upgraded_post_process_srvs[final_post_process_copy_draws-1] = nullptr;
+         final_post_process_copy_draws--;
+      }
+
       ASSERT_ONCE(ignore_upgraded_samplers); // This means we missed the end "event" for materials drawing
 
       first_frame_draw_call = true;
       playing_video = false;
       has_drawn_post_process = false;
+      final_post_process_copy_draws = 0;
    }
 
    void LoadConfigs() override
@@ -331,7 +370,7 @@ public:
 
    void PrintImGuiAbout() override
    {
-      ImGui::Text("Luma for \"Nioh\" is developed by Pumbo and is open source and free.\nIf you enjoy it, consider donating");
+      ImGui::Text("Luma for \"Nioh\" is developed by Pumbo and is open source and free.\nIf you enjoy it, consider donating.\n\nNote that \"NiohResolution\" is still needed to unlock ultrawide or unconventional resolutions.");
 
       const auto button_color = ImGui::GetStyleColorVec4(ImGuiCol_Button);
       const auto button_hovered_color = ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered);
@@ -430,6 +469,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       shader_hashes_Copy.pixel_shaders = { 0x5D15CFEE };
       shader_hashes_SwapchainCopy.pixel_shaders = { 0xF0298A93 };
       shader_hashes_PostProcessEncode.pixel_shaders = { 0x2838FB01 };
+      shader_hashes_UI.pixel_shaders = { 0xE2A52FDE };
       shader_hashes_Sky.pixel_shaders = { 0x46784DDA };
       shader_hashes_BeginMaterialsDrawing.compute_shaders = { 0xECE033E1, 0x37B447FE };
       shader_hashes_EndMaterialsDrawing.pixel_shaders = { 0xC155D568, 0x8D34F907 };

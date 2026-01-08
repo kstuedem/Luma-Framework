@@ -22,6 +22,8 @@
 SamplerState __smpsScreen_s : register(s0); // Linear sampler
 Texture2D<float4> sScreen : register(t0);
 
+// Run once at the end.
+// During some inventory menus, it can be run twice, to brighten up a character render that will be shown in a window within the UI.
 void main(
   float4 v0 : SV_Position0,
   float2 v1 : TEXCOORD0,
@@ -92,9 +94,9 @@ void main(
 #endif
   
 #if UI_DRAW_TYPE == 2 // Scale by the inverse of the relative UI brightness so we can draw the UI at brightness 1x and then multiply it back to its intended range
-	ColorGradingLUTTransferFunctionInOutCorrected(o0.rgb, VANILLA_ENCODING_TYPE, min(GAMMA_CORRECTION_TYPE, 1), true); // Clamp "GAMMA_CORRECTION_TYPE" to 1 as values above aren't supported by these funcs but they are similar enough
-  o0.rgb *= LumaSettings.GamePaperWhiteNits / LumaSettings.UIPaperWhiteNits;
-	ColorGradingLUTTransferFunctionInOutCorrected(o0.rgb, min(GAMMA_CORRECTION_TYPE, 1), VANILLA_ENCODING_TYPE, true);
+	ColorGradingLUTTransferFunctionInOutCorrected(r0.rgb, VANILLA_ENCODING_TYPE, min(GAMMA_CORRECTION_TYPE, 1), true); // Clamp "GAMMA_CORRECTION_TYPE" to 1 as values above aren't supported by these funcs but they are similar enough
+  r0.rgb *= LumaSettings.GamePaperWhiteNits / LumaSettings.UIPaperWhiteNits;
+	ColorGradingLUTTransferFunctionInOutCorrected(r0.rgb, min(GAMMA_CORRECTION_TYPE, 1), VANILLA_ENCODING_TYPE, true);
 #endif
   
   // Convert to gamma space before UI rendering and swapchain copy
