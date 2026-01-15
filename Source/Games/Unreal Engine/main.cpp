@@ -2,6 +2,7 @@
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
 #define ENABLE_NGX 1
 #define ENABLE_FIDELITY_SK 1
+#define ENABLE_POST_DRAW_CALLBACK 1
 #if !DEVELOPMENT
 #define DISABLE_DISPLAY_COMPOSITION 1
 #define HIDE_DISPLAY_MODE 1
@@ -661,6 +662,15 @@ public:
                   }
                }
 
+               if (taa_shader_info.has_multiple_render_targets)
+               {
+                  // Call original draw to populate all render targets then replace the first one later with DLSS output
+                   if (original_draw_dispatch_func && *original_draw_dispatch_func)
+                   {
+                      (*original_draw_dispatch_func)();
+                   }
+               }
+
                if (!updated_cbuffers)
                {
                   SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaSettings);
@@ -893,13 +903,17 @@ public:
       {
          ImGui::SetTooltip("Enable Super Resolution (DLSS/FSR) to change this setting.");
       }
-      
-      ImGui::Checkbox("Dithering Fix (Experimental)", &enable_dithering_fix);
-
-      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      if (ImGui::TreeNode("Experimental Features"))
       {
-         ImGui::SetTooltip("Fixes dithering issues that may appear when using DLSS/FSR with TAA. Very experimental. Requires restart.");
+         ImGui::Checkbox("Dithering Fix (Experimental)", &enable_dithering_fix);
+
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+         {
+            ImGui::SetTooltip("Fixes dithering issues that may appear when using DLSS/FSR with TAA. Very experimental. Requires restart.");
+         }
+         ImGui::TreePop();
       }
+
 #endif
    }
 

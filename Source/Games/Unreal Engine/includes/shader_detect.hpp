@@ -30,6 +30,7 @@ struct TAAShaderInfo
    int32_t depth_texture_register = -1;
    int32_t velocity_texture_register = -1;
    bool found_all = false;
+   bool has_multiple_render_targets = false;
 };
 
 struct SSAOShaderInfo
@@ -327,27 +328,30 @@ static bool IsUE4TAACandidate(const std::byte* code, size_t size, uint64_t shade
    size_t detected_3d_texture_float_count = 0; // can be dithering texture, should hopefully always be just one or none
    size_t instruction_count = 0;
    int32_t max_texture_register = -1;
-   while (offset < size_u32)
-   {
-      if (instruction_count > 16)
-         return false; // bail out if we reached too far without finding any texture declarations
-      const uint32_t token = code_u32[offset];
-      const uint32_t opcode = DECODE_D3D10_SB_OPCODE_TYPE(token);
-      uint32_t len = DECODE_D3D10_SB_TOKENIZED_INSTRUCTION_LENGTH(token);
-      len = len == 0 ? 1 : len;
+   int32_t output_count = 0;
+   // while (offset < size_u32)
+   // {
+   //    if (instruction_count > 16)
+   //       return false; // bail out if we reached too far without finding any texture declarations
+   //    const uint32_t token = code_u32[offset];
+   //    const uint32_t opcode = DECODE_D3D10_SB_OPCODE_TYPE(token);
+   //    uint32_t len = DECODE_D3D10_SB_TOKENIZED_INSTRUCTION_LENGTH(token);
+   //    len = len == 0 ? 1 : len;
 
-      if (opcode == D3D10_SB_OPCODE_DCL_RESOURCE)
-      {
-         break;
-      }
-      else
-      {
-         offset += len;
-         instruction_count++;
-      }
-   }
+   //    if (opcode == D3D10_SB_OPCODE_DCL_RESOURCE)
+   //    {
+   //       break;
+   //    }
+   //    else
+   //    {
+   //       offset += len;
+   //       instruction_count++;
+   //    }
+   // }
    while (offset < size_u32 && !found_non_texture_declaration)
    {
+      if (instruction_count > 16 && (detected_2d_texture_float_count == 0 && detected_3d_texture_float_count == 0))
+         return false; // bail out if we reached too far without finding any texture declarations
       // code_u32[offset] is the current instruction
       // code_u32[offset + 1] is the first operand
       // code_u32[offset + 2] operand index
@@ -358,7 +362,7 @@ static bool IsUE4TAACandidate(const std::byte* code, size_t size, uint64_t shade
       const uint32_t resource_type = DECODE_D3D10_SB_RESOURCE_DIMENSION(token);
       len = len == 0 ? 1 : len;
 
-      if (opcode == D3D10_SB_OPCODE_DCL_RESOURCE)
+      if(opcode == D3D10_SB_OPCODE_DCL_RESOURCE)
       {
          // check resource type and return type
          const uint32_t resource_return_type_token = code_u32[offset + 3];
@@ -380,6 +384,14 @@ static bool IsUE4TAACandidate(const std::byte* code, size_t size, uint64_t shade
             detected_3d_texture_float_count++;
          }
          offset += len;
+      } else if (opcode == D3D10_SB_OPCODE_DCL_OUTPUT || opcode == D3D11_SB_OPCODE_DCL_UNORDERED_ACCESS_VIEW_TYPED)
+      {
+         output_count++;
+         offset += len;
+      } else if( (opcode >= D3D11_SB_OPCODE_DCL_STREAM && opcode <= D3D11_SB_OPCODE_DCL_RESOURCE_STRUCTURED) ||
+                  (opcode >= D3D10_SB_OPCODE_DCL_RESOURCE && opcode <= D3D10_SB_OPCODE_DCL_GLOBAL_FLAGS) || opcode == D3D11_SB_OPCODE_DCL_GS_INSTANCE_COUNT)
+      {
+         offset += len;
       }
       else
       {
@@ -389,6 +401,9 @@ static bool IsUE4TAACandidate(const std::byte* code, size_t size, uint64_t shade
 
    if (detected_2d_texture_float_count < 4 || detected_3d_texture_float_count > 1)
       return false;
+
+   if (output_count > 1)
+      taa_shader_info.has_multiple_render_targets = true;
 
    taa_shader_info.max_texture_register = static_cast<int32_t>(max_texture_register);
    // now look for velocity decode instructions
