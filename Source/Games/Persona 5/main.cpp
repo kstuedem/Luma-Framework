@@ -10,7 +10,7 @@
 enum class FramePhase
 {
    SHADOW_MAP,
-   REFLECTION,
+   REFLECTION, // planar reflections are rarely used, one place is in Madarames Palace just outside the central garden save room
    GBUFFER,
    LIGHTING,
    DEFERRED,
@@ -28,8 +28,7 @@ struct ReplacementTexture
 
 namespace
 {
-   FramePhase frame_phase = FramePhase::SHADOW_MAP;
-   std::atomic<uint32_t> g_shadow_map_size_override = 0;
+   uint32_t g_shadow_map_size_override = 0;
    bool g_allow_upscale = true;
 
    float2 projection_jitters = {0, 0};
@@ -43,34 +42,42 @@ struct GameDeviceDataPersona5 final : public GameDeviceData
 #if ENABLE_SR
    // SR
    std::atomic<bool> has_drawn_upscaling = false;
-   bool sr_enabled = false;
 
+   // resources used to identify the deferred context used for scene drawing
    com_ptr<ID3D11CommandList> remainder_command_list;
    com_ptr<ID3D11DeviceContext> draw_device_context;
 
+   // textures we got from the game
    com_ptr<ID3D11Texture2D> source_color;
    com_ptr<ID3D11Resource> depth_texture;
    com_ptr<ID3D11Texture2D> motion_vectors;
 
+   // the command list we split to interject dlss
+   com_ptr<ID3D11CommandList> partial_command_list;
+
+   // resources used to apply sr
    com_ptr<ID3D11Texture2D> decoded_motion_vectors;
    com_ptr<ID3D11UnorderedAccessView> decoded_motion_vectors_uav;
-
    com_ptr<ID3D11Texture2D> resolve_texture;
    com_ptr<ID3D11Texture2D> merged_texture;
    com_ptr<ID3D11UnorderedAccessView> merged_texture_uav;
    com_ptr<ID3D11ShaderResourceView> merged_texture_srv;
    com_ptr<ID3D11RenderTargetView> merged_texture_rtv;
 
-   com_ptr<ID3D11CommandList> partial_command_list;
-
+   // pool for replacement textures
    std::vector<ReplacementTexture> replacement_textures;
+   // active replacements for the current frame
    std::unordered_map<ID3D11Resource*, uint32_t> current_replacements;
+   // the game uses this to draw geometry for the UI this is the only resource that gets mapped
+   // after the bloom effect, as constant buffers are updated with UpdateSubresource
    com_ptr<ID3D11Buffer> modifiable_index_vertex_buffer;
-   uint2 render_resolution;
-   uint2 target_resolution;
+   uint2 render_resolution = {};
+   uint2 target_resolution = {};
 #endif // ENABLE_SR
    com_ptr<ID3D11Buffer> scratch_constant_buffer;
    com_ptr<ID3D11UnorderedAccessView> scratch_constant_buffer_uav;
+
+   FramePhase frame_phase = FramePhase::SHADOW_MAP;
 };
 
 float Halton(int32_t Index, int32_t Base)
@@ -110,9 +117,7 @@ public:
    void LoadConfigs() override
    {
       reshade::api::effect_runtime* runtime = nullptr;
-      uint32_t shadow_map_size_override;
-      reshade::get_config_value(runtime, NAME, "ShadowMapSizeOverride", shadow_map_size_override);
-      g_shadow_map_size_override = shadow_map_size_override;
+      reshade::get_config_value(runtime, NAME, "ShadowMapSizeOverride", g_shadow_map_size_override);
       reshade::get_config_value(runtime, NAME, "EnableUpscaling", g_allow_upscale);
    }
 
@@ -145,7 +150,6 @@ public:
          uavd.Buffer.NumElements = 1;
          native_device->CreateUnorderedAccessView(game_device_data.scratch_constant_buffer.get(), &uavd, &game_device_data.scratch_constant_buffer_uav);
       }
-      game_device_data.sr_enabled = device_data.sr_type != SR::Type::None;
    }
 
    void SetupSR(ID3D11DeviceContext* native_device_context, GameDeviceDataPersona5& game_device_data, DeviceData& device_data)
@@ -416,7 +420,9 @@ public:
       com_ptr<ID3D11RenderTargetView> render_target_views[2];
       native_device_context->OMGetRenderTargets(2, &render_target_views[0], &depth_stencil_view);
 
-      if (frame_phase == FramePhase::SHADOW_MAP)
+      if (game_device_data.frame_phase == FramePhase::SHADOW_MAP &&
+          depth_stencil_view &&
+          !render_target_views[1])
       {
          if (!depth_stencil_view)
          {
@@ -464,8 +470,8 @@ public:
          }
       }
 
-      if ((frame_phase == FramePhase::SHADOW_MAP ||
-             frame_phase == FramePhase::REFLECTION) &&
+      if ((game_device_data.frame_phase == FramePhase::SHADOW_MAP ||
+             game_device_data.frame_phase == FramePhase::REFLECTION) &&
           render_target_views[0] &&
           render_target_views[1] &&
           depth_stencil_view)
@@ -484,13 +490,16 @@ public:
          }
          D3D11_TEXTURE2D_DESC tex_desc;
          tex->GetDesc(&tex_desc);
+
+         // the normal gbuffer is DXGI_FORMAT_R11G11B10_FLOAT
+         // for planar reflection it will be the standart scene color format(DXGI_FORMAT_R10G10B10A2_UNORM)
          if (tex_desc.Format != DXGI_FORMAT_R11G11B10_FLOAT)
          {
-            frame_phase = FramePhase::REFLECTION;
+            game_device_data.frame_phase = FramePhase::REFLECTION;
          }
          else
          {
-            frame_phase = FramePhase::GBUFFER;
+            game_device_data.frame_phase = FramePhase::GBUFFER;
 
             depth_stencil_view->GetResource(&game_device_data.depth_texture);
 
@@ -505,7 +514,7 @@ public:
             com_ptr<ID3D11Buffer> cbViewProj;
             native_device_context->VSGetConstantBuffers(2, 1, &cbViewProj);
 
-            if (cbViewProj && game_device_data.sr_enabled)
+            if (cbViewProj && device_data.sr_type != SR::Type::None)
             {
                cb_luma_global_settings.GameSettings.JitterOffset.x = 2.0f * projection_jitters.x / (float)target_desc.Width;
                cb_luma_global_settings.GameSettings.JitterOffset.y = 2.0f * projection_jitters.y / (float)target_desc.Height;
@@ -526,12 +535,12 @@ public:
       }
       if (original_shader_hashes.Contains(shader_hashes_light))
       {
-         frame_phase = FramePhase::LIGHTING;
+         game_device_data.frame_phase = FramePhase::LIGHTING;
       }
-      else if (frame_phase == FramePhase::LIGHTING &&
+      else if (game_device_data.frame_phase == FramePhase::LIGHTING &&
                !original_shader_hashes.Contains(shader_hashes_light))
       {
-         frame_phase = FramePhase::DEFERRED;
+         game_device_data.frame_phase = FramePhase::DEFERRED;
 
          com_ptr<ID3D11Buffer> cbShadow;
          native_device_context->PSGetConstantBuffers(6, 1, &cbShadow);
@@ -553,9 +562,12 @@ public:
       }
       else if (original_shader_hashes.Contains(shader_hashes_bloom))
       {
-         frame_phase = FramePhase::POSTPROCESSING_AND_UI;
-         if (game_device_data.sr_enabled)
+         // only apply sr when we have the necessary input resources
+         if (device_data.sr_type != SR::Type::None &&
+             game_device_data.depth_texture &&
+             game_device_data.motion_vectors)
          {
+            game_device_data.frame_phase = FramePhase::POSTPROCESSING_AND_UI;
             com_ptr<ID3D11ShaderResourceView> color_srv;
             native_device_context->PSGetShaderResources(0, 1, &color_srv);
 
@@ -565,6 +577,7 @@ public:
 
             SetupSR(native_device_context, game_device_data, device_data);
 
+            // split the command list since DLSS must be executed on an immediate context
             native_device_context->FinishCommandList(TRUE, &game_device_data.partial_command_list);
             if (game_device_data.modifiable_index_vertex_buffer)
             {
@@ -577,10 +590,10 @@ public:
             game_device_data.draw_device_context = native_device_context;
          }
       }
-      if (frame_phase == FramePhase::POSTPROCESSING_AND_UI &&
+      if (game_device_data.frame_phase == FramePhase::POSTPROCESSING_AND_UI &&
           (game_device_data.render_resolution.x != game_device_data.target_resolution.x ||
              game_device_data.render_resolution.y != game_device_data.target_resolution.y) &&
-          game_device_data.sr_enabled)
+          device_data.sr_type != SR::Type::None)
       {
          com_ptr<ID3D11ShaderResourceView> srvs[4];
          native_device_context->PSGetShaderResources(0, 4, &srvs[0]);
@@ -647,7 +660,6 @@ public:
 
       device_data.force_reset_sr = !game_device_data.has_drawn_upscaling;
       game_device_data.has_drawn_upscaling = false;
-      game_device_data.sr_enabled = device_data.sr_type != SR::Type::None;
 
       // Update TAA jitters:
       int phases = 16;           // Decent default for any modern TAA
@@ -658,7 +670,7 @@ public:
       // Note: we add 1 to the temporal frame here to avoid a bias, given that Halton always returns 0 for 0
       projection_jitters.x = Halton(temporal_frame + 1, 2) - 0.5f;
       projection_jitters.y = Halton(temporal_frame + 1, 3) - 0.5f;
-      frame_phase = FramePhase::SHADOW_MAP;
+      game_device_data.frame_phase = FramePhase::SHADOW_MAP;
 
       // release all resources from the game we got this frame
       game_device_data.remainder_command_list.reset();
@@ -687,7 +699,7 @@ public:
             native_device_context->ExecuteCommandList(game_device_data.partial_command_list.get(), FALSE);
             game_device_data.partial_command_list.reset();
 
-            if (!game_device_data.source_color || !game_device_data.depth_texture || !game_device_data.sr_enabled)
+            if (!game_device_data.source_color || !game_device_data.depth_texture || device_data.sr_type == SR::Type::None)
             {
                return;
             }
@@ -859,7 +871,7 @@ public:
       char buffer[32];
       if (g_shadow_map_size_override > 0)
       {
-         sprintf_s(buffer, 32, "%d", g_shadow_map_size_override.load());
+         sprintf_s(buffer, 32, "%d", g_shadow_map_size_override);
          previewString = buffer;
       }
       else
@@ -874,7 +886,7 @@ public:
             if (ImGui::Selectable(name, selected))
             {
                g_shadow_map_size_override = size;
-               reshade::set_config_value(runtime, NAME, "shadow_map_size_override", g_shadow_map_size_override.load());
+               reshade::set_config_value(runtime, NAME, "shadow_map_size_override", g_shadow_map_size_override);
             }
             if (selected)
             {

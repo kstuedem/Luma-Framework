@@ -70,7 +70,7 @@
     <TargetName Condition="'$(Configuration)|$(Platform)'=='Test-Release|x64'">$(SolutionName)-$(ProjectName)</TargetName>
     <TargetName Condition="'$(Configuration)|$(Platform)'=='Development-Release|x64'">$(SolutionName)-$(ProjectName)</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|x64'">.addon</TargetExt>
-    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Test-Release|x64'">.addon64</TargetExt>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Test-Release|x64'">.addon</TargetExt>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Development-Release|x64'">.addon</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|x64'">false</LinkIncremental>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Test-Release|x64'">false</LinkIncremental>
