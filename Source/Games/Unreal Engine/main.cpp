@@ -1508,7 +1508,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       Globals::VERSION = 1;
 
       cb_default_game_settings.HDRHighlightsHuePreservation = 0.667f;
-      cb_default_game_settings.HDRHighlightsChrominancePreservation = 0.2f;
+      cb_default_game_settings.HDRHighlightsChrominancePreservation = 0.333f;
       cb_default_game_settings.HDRChrominance = 1.0f;
       cb_luma_global_settings.GameSettings = cb_default_game_settings;
 

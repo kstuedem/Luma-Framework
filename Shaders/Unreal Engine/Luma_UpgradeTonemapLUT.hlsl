@@ -229,7 +229,7 @@ void main(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 #elif TONEMAP_TYPE == 1 // Lame AutoHDR method (just for testing really)
 
-  upgradedColor.rgb = PumboAutoHDR(upgradedColor.rgb, FLT_MAX, LumaSettings.GamePaperWhiteNits);
+  upgradedColor.rgb = PumboAutoHDR(upgradedColor.rgb, FLT_MAX, LumaSettings.GamePaperWhiteNits, 3.333, 0.333);
 
 #elif TONEMAP_TYPE == 2 // Extrapolate HDR out of SDR
 
@@ -302,12 +302,6 @@ void main(uint3 DispatchThreadId : SV_DispatchThreadID)
     upgradedColor = tonemappedColor.rgb >= midGrayOut ? remappedHDRColor : tonemappedColor.rgb;
     
 #endif
-
-    const float paperWhite = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
-    const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
-    DICESettings settings = DefaultDICESettings(DICE_TYPE_BY_LUMINANCE_PQ_CORRECT_CHANNELS_BEYOND_PEAK_WHITE);
-    settings.DesaturationVsDarkeningRatio = 0.5; // TODO: tweak all
-    upgradedColor = DICETonemap(upgradedColor * paperWhite, peakWhite, settings) / paperWhite;
   }
 
 #else // Untonemapped
@@ -317,7 +311,17 @@ void main(uint3 DispatchThreadId : SV_DispatchThreadID)
 #endif
 
   if (LumaSettings.DisplayMode == 1)
+  {
     upgradedColor = Saturation(upgradedColor, LumaSettings.GameSettings.HDRChrominance);
+
+#if TONEMAP_TYPE == 2
+    const float paperWhite = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
+    const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
+    DICESettings settings = DefaultDICESettings(DICE_TYPE_BY_LUMINANCE_PQ_CORRECT_CHANNELS_BEYOND_PEAK_WHITE);
+    settings.DesaturationVsDarkeningRatio = 0.5; // TODO: tweak all
+    upgradedColor = DICETonemap(upgradedColor * paperWhite, peakWhite, settings) / paperWhite;
+#endif
+  }
 
   upgradedColor.rgb = EncodeLUTOutput(upgradedColor.rgb);
 
