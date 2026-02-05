@@ -167,10 +167,10 @@ float3 SampleLUTTexel(int3 pixelCoords)
 #endif
   return 0.0;
 }
-float3 SampleLUTCoordi(float3 uv)
+float3 SampleLUTCoords(float3 uvw)
 {
 #if COLOR_GRADING_LUT
-  return ColorCorrectionTexture.Sample(ColorCorrectionTexture_s, uv).rgb;
+  return ColorCorrectionTexture.Sample(ColorCorrectionTexture_s, uvw).rgb;
 #endif
   return 0.0;
 }

@@ -3,8 +3,6 @@
 #define ENABLE_NGX 1
 #define ENABLE_FIDELITY_SK 1
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
-#define DISABLE_DISPLAY_COMPOSITION 1
-#define HIDE_DISPLAY_MODE 1
 #ifdef NDEBUG
 #define ALLOW_SHADERS_DUMPING 1
 #endif
@@ -2004,6 +2002,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       old_shader_file_names.emplace("Output_SDR_0x506D5998_0xF68D39B5_0xBBB9CE42_0x51E2B894.ps_5_0.hlsl");
       old_shader_file_names.emplace("Velocity_Flatten_0x4EB2EA5B.cs_5_0.hlsl");
       old_shader_file_names.emplace("Velocity_Gather_0xFEE03685.cs_5_0.hlsl");
+#endif
+#if !DEVELOPMENT
+      force_disable_display_composition = true; // Game already has an HDR toggle and we just inherit that
 #endif
       swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;
       swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
