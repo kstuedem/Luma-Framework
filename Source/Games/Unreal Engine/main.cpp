@@ -361,6 +361,7 @@ public:
          // Test for inverted colors LUTs
          // Detect LUTs that are fading to white or black and don't upgrade them?
          // Detect white clipping point and skip from there up?
+         // Add support for the oldest UE4 versions
 
          // Always correct the wrong luminance calculations and sRGB encode/decode to not clip near black detail
          std::vector<std::byte*> scan_matches = System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(code), size, pattern_srgb_conversion_max);
@@ -1239,11 +1240,16 @@ public:
       {
          ImGui::SetTooltip("Enables Luma's Unreal Engine HDR remastering. It works in the majority of games out of the box.\nIf the game already already supported HDR, make sure to turn it off in the settings.\n\nRequires rester to apply.");
       }
-      ImGui::PushID("HDR Active");
-      ImGui::BeginDisabled();
-      ImGui::SmallButton(game_device_data.tonemap_lut_texture.get() ? ICON_FK_OK : ICON_FK_WARNING);
-      ImGui::EndDisabled();
-      ImGui::PopID();
+      // Print a check/warning if it's active or not active
+      if (enable_hdr || next_enable_hdr)
+      {
+         ImGui::SameLine();
+         ImGui::PushID("HDR Active");
+         ImGui::BeginDisabled();
+         ImGui::SmallButton(game_device_data.tonemap_lut_texture.get() ? ICON_FK_OK : ICON_FK_WARNING);
+         ImGui::EndDisabled();
+         ImGui::PopID();
+      }
 
       if (enable_hdr && cb_luma_global_settings.DisplayMode == DisplayModeType::HDR)
       {
@@ -1506,6 +1512,22 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       cb_default_game_settings.HDRChrominance = 1.0f;
       cb_luma_global_settings.GameSettings = cb_default_game_settings;
 
+      // Needed for Super Resolution mips bias
+      enable_samplers_upgrade = true;
+
+      game = new UnrealEngine();
+   }
+   else if (ul_reason_for_call == DLL_PROCESS_DETACH)
+   {
+      reshade::unregister_event<reshade::addon_event::map_buffer_region>(UnrealEngine::OnMapBufferRegion);
+      reshade::unregister_event<reshade::addon_event::unmap_buffer_region>(UnrealEngine::OnUnmapBufferRegion);
+   }
+
+   CoreMain(hModule, ul_reason_for_call, lpReserved);
+
+   // Needs to be done after core init (because it calls some ReShade funcs)
+   if (ul_reason_for_call == DLL_PROCESS_ATTACH)
+   {
 #if !DEVELOPMENT // Force HDR in dev mode, so we can easily debug textures
       reshade::get_config_value(nullptr, NAME, "FirstBoot", first_boot);
       if (first_boot)
@@ -1580,19 +1602,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          texture_format_upgrades_lut_dimensions = LUTDimensions::_3D;
 #endif
       }
-
-      // Needed for Super Resolution mips bias
-      enable_samplers_upgrade = true;
-
-      game = new UnrealEngine();
    }
-   else if (ul_reason_for_call == DLL_PROCESS_DETACH)
-   {
-      reshade::unregister_event<reshade::addon_event::map_buffer_region>(UnrealEngine::OnMapBufferRegion);
-      reshade::unregister_event<reshade::addon_event::unmap_buffer_region>(UnrealEngine::OnUnmapBufferRegion);
-   }
-
-   CoreMain(hModule, ul_reason_for_call, lpReserved);
 
    return TRUE;
 }
