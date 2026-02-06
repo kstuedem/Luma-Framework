@@ -1,4 +1,4 @@
-#include "../Includes/Common.hlsl"
+#include "Includes/Common.hlsl"
 
 cbuffer cb0 : register(b0)
 {
@@ -7,6 +7,7 @@ cbuffer cb0 : register(b0)
 
 #define cmp
 
+// We fixed this one to not produce NaNs
 void main(
   linear noperspective float2 v0 : TEXCOORD0,
   float4 v1 : SV_POSITION0,
@@ -50,7 +51,7 @@ void main(
   r0.w = cmp(cb0[36].x < 4000);
   r1.xy = r0.ww ? r3.xy : r1.xy;
   r0.w = dot(r2.xy, r2.xy);
-  r0.w = rsqrt(r0.w);
+  r0.w = /*r0.w == 0 ? 0.0 :*/ rsqrt(r0.w);
   r1.zw = r2.xy * r0.ww;
   r0.w = cb0[36].y * -r1.w;
   r0.w = r0.w * 0.0500000007 + r2.x;
@@ -122,16 +123,12 @@ void main(
   r0.w = dot(r0.xyz, float3(0.272228718,0.674081743,0.0536895171));
   r0.xyz = r0.xyz + -r0.www;
   r0.xyz = cb0[37].xyz * r0.xyz + r0.www;
-  r0.xyz = max(float3(0,0,0), r0.xyz);
+  //r0.xyz = max(float3(0,0,0), r0.xyz); // Luma: disabled
   r0.xyz = float3(5.55555534,5.55555534,5.55555534) * r0.xyz;
-  r0.xyz = log2(r0.xyz);
-  r0.xyz = cb0[38].xyz * r0.xyz;
-  r0.xyz = exp2(r0.xyz);
+  r0.xyz = pow(abs(r0.xyz), cb0[38].xyz) * Sign_Fast(r0.xyz); // Luma: added sign mirroring
   r0.xyz = float3(0.180000007,0.180000007,0.180000007) * r0.xyz;
   r1.xyz = float3(1,1,1) / cb0[39].xyz;
-  r0.xyz = log2(r0.xyz);
-  r0.xyz = r1.xyz * r0.xyz;
-  r0.xyz = exp2(r0.xyz);
+  r0.xyz = pow(abs(r0.xyz), r1.xyz) * Sign_Fast(r0.xyz); // Luma: added sign mirroring
   r0.xyz = r0.xyz * cb0[40].xyz + cb0[41].xyz;
   r1.x = dot(float3(1.70505154,-0.621790707,-0.0832583979), r0.xyz);
   r1.y = dot(float3(-0.130257145,1.14080286,-0.0105485283), r0.xyz);
@@ -146,9 +143,9 @@ void main(
     r0.w = rcp(r0.w);
     r2.xyz = cb0[27].xyz * r0.www + cb0[26].xyz;
     r0.xyz = r2.xyz * r0.xyz;
-    r0.xyz = max(float3(0,0,0), r0.xyz);
+    //r0.xyz = max(float3(0,0,0), r0.xyz); // Luma: disabled
     r2.xyz = cb0[23].xxx + -r0.xyz;
-    r2.xyz = max(float3(0,0,0), r2.xyz);
+    r2.xyz = max(float3(0,0,0), r2.xyz); // Luma: disabled // TODO: why is this needed? Should we enable the above too then?
     r3.xyz = max(cb0[23].zzz, r0.xyz);
     r0.xyz = max(cb0[23].xxx, r0.xyz);
     r0.xyz = min(cb0[23].zzz, r0.xyz);
@@ -227,7 +224,7 @@ void main(
     r1.x = dot(float3(1.45143926,-0.236510754,-0.214928567), r2.xyz);
     r1.y = dot(float3(-0.0765537769,1.17622972,-0.0996759236), r2.xyz);
     r1.z = dot(float3(0.00831614807,-0.00603244966,0.997716308), r2.xyz);
-    r1.xyz = max(float3(0,0,0), r1.xyz);
+    //r1.xyz = max(float3(0,0,0), r1.xyz); // Luma: disabled
     r0.w = dot(r1.xyz, float3(0.272228718,0.674081743,0.0536895171));
     r1.xyz = r1.xyz + -r0.www;
     r1.xyz = r1.xyz * float3(0.959999979,0.959999979,0.959999979) + r0.www;
@@ -295,7 +292,8 @@ void main(
     r2.x = dot(float3(1.70505154,-0.621790707,-0.0832583979), r1.xyz);
     r2.y = dot(float3(-0.130257145,1.14080286,-0.0105485283), r1.xyz);
     r2.z = dot(float3(-0.0240032747,-0.128968775,1.15297174), r1.xyz);
-    r0.xyz = max(float3(0,0,0), r2.xyz);
+    //r2.xyz = max(float3(0,0,0), r2.xyz); // Luma: disabled
+    r0.xyz = r2.xyz;
   }
   r1.xyz = r0.xyz * r0.xyz;
   r0.xyz = cb0[18].yyy * r0.xyz;
@@ -304,7 +302,8 @@ void main(
   r1.xyz = cb0[34].yzw * r0.xyz;
   r0.xyz = -r0.xyz * cb0[34].yzw + cb0[35].xyz;
   r0.xyz = cb0[35].www * r0.xyz + r1.xyz;
-  r0.xyz = log2(r0.xyz);
+  float3 signs = Sign_Fast(r0.xyz);
+  r0.xyz = log2(abs(r0.xyz)); // Luma: added sign mirroring
   r0.xyz = cb0[19].yyy * r0.xyz;
   r1.xyz = exp2(r0.xyz);
   if (cb0[41].w == 0) {
@@ -316,18 +315,17 @@ void main(
     r2.xyz = r3.xyz ? r4.xyz : r2.xyz;
   } else {
     r0.w = cmp(asint(cb0[41].w) == 1);
-    r1.xyz = max(float3(6.10351999e-005,6.10351999e-005,6.10351999e-005), r1.xyz);
+    //r1.xyz = max(float3(6.10351999e-005,6.10351999e-005,6.10351999e-005), r1.xyz); // Luma: disabled
     r3.xyz = float3(4.5,4.5,4.5) * r1.xyz;
     r1.xyz = max(float3(0.0179999992,0.0179999992,0.0179999992), r1.xyz);
-    r1.xyz = log2(r1.xyz);
-    r1.xyz = float3(0.449999988,0.449999988,0.449999988) * r1.xyz;
-    r1.xyz = exp2(r1.xyz);
+    r1.xyz = pow(abs(r1.xyz), 0.45) * Sign_Fast(r1.xyz); // Luma: added sign mirroring (might not be necessary here as we already do it above)
     r1.xyz = r1.xyz * float3(1.09899998,1.09899998,1.09899998) + float3(-0.0989999995,-0.0989999995,-0.0989999995);
     r1.xyz = min(r3.xyz, r1.xyz);
     r0.xyz = cb0[19].zzz * r0.xyz;
     r0.xyz = exp2(r0.xyz);
     r2.xyz = r0.www ? r1.xyz : r0.xyz;
   }
+  r2.xyz *= signs;
   o0.xyz = float3(0.952381015,0.952381015,0.952381015) * r2.xyz;
   o0.w = 0;
 }

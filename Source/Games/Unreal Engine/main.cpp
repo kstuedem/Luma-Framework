@@ -299,7 +299,8 @@ public:
          0.0005471261f, -0.0008833746f, 1.0003362486f
       };
       // x /= 1.05
-      const std::vector<uint8_t> pattern_lut_output_scaling = { 0x3E, 0xCF, 0x73, 0x3F, 0x3E, 0xCF, 0x73, 0x3F, 0x3E, 0xCF, 0x73, 0x3F };
+      const std::vector<uint8_t> pattern_lut_output_scaling_a = { 0x3E, 0xCF, 0x73, 0x3F, 0x3E, 0xCF, 0x73, 0x3F, 0x3E, 0xCF, 0x73, 0x3F };
+      const std::vector<uint8_t> pattern_lut_output_scaling_b = { 0x3D, 0xCF, 0x73, 0x3F, 0x3D, 0xCF, 0x73, 0x3F, 0x3D, 0xCF, 0x73, 0x3F };
       // sRGB identifier (1.055 etc)
       const std::vector<uint8_t> pattern_srgb = { 0x3D, 0x0A, 0x87, 0x3F, 0x3D, 0x0A, 0x87, 0x3F, 0x3D, 0x0A, 0x87, 0x3F };
       // "6.10352e-5" from "x = max(6.10352e-5, x)" in the sRGB encode/decode conversions
@@ -321,7 +322,7 @@ public:
 
       constexpr auto pattern_aces_blue_correct_matrix = MakeFloatsPattern(aces_blue_correct_matrix);
       //if (!System::ScanMemoryForPattern(code, size, pattern_aces_blue_correct_matrix.data(), pattern_aces_blue_correct_matrix.size()).empty())
-      if (!System::ScanMemoryForPattern(code, size, pattern_lut_output_scaling).empty() && !System::ScanMemoryForPattern(code, size, pattern_srgb).empty())
+      if ((!System::ScanMemoryForPattern(code, size, pattern_lut_output_scaling_a).empty() || !System::ScanMemoryForPattern(code, size, pattern_lut_output_scaling_b).empty()) && !System::ScanMemoryForPattern(code, size, pattern_srgb).empty())
       {
          if (type == reshade::api::pipeline_subobject_type::pixel_shader)
          {
@@ -362,6 +363,7 @@ public:
          // Detect LUTs that are fading to white or black and don't upgrade them?
          // Detect white clipping point and skip from there up?
          // Add support for the oldest UE4 versions
+         // Fix up raised blacks from TM parameters and from color grading LUTs
 
          // Always correct the wrong luminance calculations and sRGB encode/decode to not clip near black detail
          std::vector<std::byte*> scan_matches = System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(code), size, pattern_srgb_conversion_max);
@@ -1515,6 +1517,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // Needed for Super Resolution mips bias
       enable_samplers_upgrade = true;
 
+      // UE games scale the resolution by DPI, which is generally a bad thing for games
+      force_ignore_dpi = true;
+
       game = new UnrealEngine();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
@@ -1601,6 +1606,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          texture_format_upgrades_lut_size = 32; // TODO: upgrade both 2D and 3D (maybe manually by detecting the shaders?)
          texture_format_upgrades_lut_dimensions = LUTDimensions::_3D;
 #endif
+
+         // Add per game shader hashes that require texture format upgrades, after tonemapping:
+         auto_texture_format_upgrade_shader_hashes.try_emplace(0x9A6F4220, std::vector<uint8_t>{}, std::vector<uint8_t>{0}); // Little Nightmares Enhanced Edition - FSR Sharpening/Upscaling - it changes the aspect ratio and resolution at the same time and thus fails aspect ratio checks
       }
    }
 

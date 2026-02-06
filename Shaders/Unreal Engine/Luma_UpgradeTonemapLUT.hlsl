@@ -62,13 +62,25 @@ float3 DecodeLUTOutput(float3 color)
   return color;
 }
 
+// UE LUT builder stored output in R10G10B10A2_UNORM and that turns NaNs to 0.
+// Theoretically we could simply run a quick max with 0, however, that would remove any negative colors,
+// which, if we customized LUTs, we could have, due to grading being run in AP1.
+float3 SanitizeLUTSample(float3 color)
+{
+  return IsNaN_Strict(color) ? 0.0 : color;
+}
+float4 SanitizeLUTSample(float4 color)
+{
+  return IsNaN_Strict(color) ? 0.0 : color;
+}
+
 // TODO: move these to generic funcs!
 float4 SampleLUTTexel(int3 pixelCoords)
 {
 #if DIMENSIONS_2D
-  return sourceLUT.Load(int3(pixelCoords.x + pixelCoords.z * LUT_SIZE, pixelCoords.y, 0));
+  return SanitizeLUTSample(sourceLUT.Load(int3(pixelCoords.x + pixelCoords.z * LUT_SIZE, pixelCoords.y, 0)));
 #else
-  return sourceLUT.Load(int4(pixelCoords, 0));
+  return SanitizeLUTSample(sourceLUT.Load(int4(pixelCoords, 0)));
 #endif
 }
 float3 SampleLUTColor(float3 encodedColor)
@@ -90,11 +102,11 @@ float3 SampleLUTColor(float3 encodedColor)
   float2 uv0 = (float2(tc.r + b0 * LUT_SIZE, tc.g) + 0.5) / dim;
   float2 uv1 = uv0 + float2(1.0 / LUT_SIZE, 0.0); // exactly one slice to the right
 
-  float3 c0 = sourceLUT.SampleLevel(linearSampler, uv0, 0).rgb;
-  float3 c1 = sourceLUT.SampleLevel(linearSampler, uv1, 0).rgb;
+  float3 c0 = SanitizeLUTSample(sourceLUT.SampleLevel(linearSampler, uv0, 0).rgb);
+  float3 c1 = SanitizeLUTSample(sourceLUT.SampleLevel(linearSampler, uv1, 0).rgb);
   return lerp(c0, c1, t);
 #else
-  return sourceLUT.SampleLevel(linearSampler, EncodedColorToUVZ(encodedColor), 0).rgb;
+  return SanitizeLUTSample(sourceLUT.SampleLevel(linearSampler, EncodedColorToUVZ(encodedColor), 0).rgb);
 #endif
 }
 float3 SampleLUTCoords(float3 uvw)
@@ -114,11 +126,11 @@ float3 SampleLUTCoords(float3 uvw)
   float2 uv0 = (float2(tc.r + b0 * LUT_SIZE, tc.g) + 0.5) / dim;
   float2 uv1 = uv0 + float2(1.0 / LUT_SIZE, 0.0);
 
-  float3 c0 = sourceLUT.SampleLevel(linearSampler, uv0, 0).rgb;
-  float3 c1 = sourceLUT.SampleLevel(linearSampler, uv1, 0).rgb;
+  float3 c0 = SanitizeLUTSample(sourceLUT.SampleLevel(linearSampler, uv0, 0).rgb);
+  float3 c1 = SanitizeLUTSample(sourceLUT.SampleLevel(linearSampler, uv1, 0).rgb);
   return lerp(c0, c1, t);
 #else
-  return sourceLUT.SampleLevel(linearSampler, uvw, 0).rgb;
+  return SanitizeLUTSample(sourceLUT.SampleLevel(linearSampler, uvw, 0).rgb);
 #endif
 }
 
@@ -213,7 +225,7 @@ void main(uint3 DispatchThreadId : SV_DispatchThreadID)
   float3 originalHDRColor = DecodeLUTInput((float3)pixelPos / (float)LUT_MAX);
 
 #if 0 // Test: Passthrough
-  targetLUT[pixelPos.xyz] = sourceLUT.Load(int4(pixelPos.xyz, 0));
+  targetLUT[pixelPos.xyz] = SanitizeLUTSample(sourceLUT.Load(int4(pixelPos.xyz, 0)));
   return;
 #endif
 #endif
@@ -274,11 +286,11 @@ void main(uint3 DispatchThreadId : SV_DispatchThreadID)
 
     // The more we are above mid grey, the more we restore the original hue, but from the "halved" tonemapped color,
     // so theren't no weird hue shift or desaturation from strong highlights.
-    float tonemapHalveScale = lerp(1.0, 0.667 * (debug ? DVS2 : 1.0), sqrt(maxMidGrayProgress)); // Lower seems to break gradients. The value is fixed though the optimal value might depend by game or by scene.
+    float tonemapHalveScale = lerp(1.0, lerp(0.667, 1.0, saturate((LumaSettings.GameSettings.HDRHighlightsHuePreservation - 0.75) / (1.0 - 0.75))) * (debug ? DVS2 : 1.0), sqrt(maxMidGrayProgress)); // Lower seems to break gradients. The value is fixed though the optimal value might depend by game or by scene.
     float3 hueSourceTonemappedColor = DecodeLUTOutput(SampleLUTColor(EncodeLUTInput(originalHDRColor * tonemapHalveScale))) / tonemapHalveScale;
     //hueSourceTonemappedColor = lerp(tonemappedColor.rgb, hueSourceTonemappedColor, sqrt(maxMidGrayProgress) /*sqrt(saturate(tonemappedColor.rgb))*/); // We'd do the same lerp twice, we already do it above. Also it's probably bad to do it by channel.
     float hueRestorationAmount = LumaSettings.GameSettings.HDRHighlightsHuePreservation;
-    float shadowChrominanceRestorationAmount = 1.0 - sqrt(maxMidGrayProgress);
+    float shadowChrominanceRestorationAmount = 1.0 - sqrt(maxMidGrayProgress); // We always do it to improve blends and preserve chrominance in shadow
     remappedHDRColor = RestoreHueAndChrominance(remappedHDRColor, hueSourceTonemappedColor, hueRestorationAmount, shadowChrominanceRestorationAmount);
 
     // The more we are above mid grey, the more we restore the original chrominance (saturation),

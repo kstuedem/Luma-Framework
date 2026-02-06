@@ -329,6 +329,7 @@ namespace
 
       // In case we needed swapchain RTVs even outside of our display composition shaders, we can force create them at all times
       bool force_create_swapchain_rtvs = false;
+      bool redirect_empty_resource_views_to_swapchain = false;
 
       // For now, by default, we prevent fullscreen on boot and later, given that it's pointless.
       // If there were issues, we could exclusively do it when the swapchain resolution matched the monitor resolution.
@@ -4290,6 +4291,7 @@ namespace
             bool aspect_ratio_filter = source_desc.type == reshade::api::resource_type::texture_2d && !is_2x_square && !is_1x_square && target_aspect_ratio >= (min_aspect_ratio - FLT_EPSILON) && target_aspect_ratio <= (max_aspect_ratio + FLT_EPSILON); // Note: we don't check the aspect ratio on the depth, we only do it on 2D textures. We also ignore 1x1 and 2x2 for extra safety
             bool size_filter = source_desc.texture.width == target_desc.texture.width && source_desc.texture.height == target_desc.texture.height && source_desc.texture.depth_or_layers == target_desc.texture.depth_or_layers;
             size_filter |= aspect_ratio_filter;
+            size_filter |= source_desc.type == reshade::api::resource_type::texture_2d && target_desc.texture.width == uint(device_data.output_resolution.x + 0.5) && target_desc.texture.height == uint(device_data.output_resolution.y + 0.5); // Force upgrade if it's equal to the swapchain resolution, this pass could be one that converts from a constrained to a fullscreen aspect ratio
 
             // Avoid upgrading textures that don't have the same number of channels (unless they'd now have more!), we wouldn't want to automatically turn 1 channel to 4 channel textures.
             // Also prevent upgrades if the size isn't compatible (aspect ratio matching).
@@ -7397,6 +7399,26 @@ namespace
          break;
       }
       }
+
+#if 0 // TODO: delete this and "redirect_empty_resource_views_to_swapchain" or test in more games (e.g. Mafia II, Titanfall 2)
+      // Some games fail to create resources for the swapchain if it was upgraded in format,
+      // however they might still pass through this function, so try to catch the case and redirect the attempted view to the upgraded swapchain.
+      // The only better alternative would be to make two swapchains, with the original kept untouched, and redirected on an upgraded one.
+      if (resource.handle == 0
+         && redirect_empty_resource_views_to_swapchain
+         // Don't check for multisample textures, they can't be used on the swapchain and they likely weren't used by any games
+         && (desc.type == reshade::api::resource_view_type::unknown || desc.type == reshade::api::resource_view_type::texture_2d)
+         && desc.texture.level_count == 1
+         // All valid swapchain formats
+         && (desc.format == reshade::api::format::unknown || desc.format == reshade::api::format::r8g8b8a8_unorm_srgb || desc.format == reshade::api::format::b8g8r8a8_unorm_srgb || desc.format == reshade::api::format::r8g8b8a8_unorm || desc.format == reshade::api::format::b8g8r8a8_unorm || desc.format == reshade::api::format::r10g10b10a2_unorm))
+      {
+         DeviceData& device_data = *device->get_private_data<DeviceData>();
+         const std::shared_lock lock(device_data.mutex);
+
+         if (!device_data.back_buffers.empty())
+            resource.handle = *device_data.back_buffers.begin(); // There's only 1 swapchain buffer in DX11.
+      }
+#endif
 
       // In DX11 apps can not pass a "DESC" when creating resource views, and DX11 will automatically generate the default one from it, we handle it through "reshade::api::resource_view_type::unknown".
       if (resource.handle != 0 && (desc.type == reshade::api::resource_view_type::unknown || desc.type == lut_dimensions || desc.type == reshade::api::resource_view_type::texture_2d || desc.type == reshade::api::resource_view_type::texture_2d_array || desc.type == reshade::api::resource_view_type::texture_2d_multisample || desc.type == reshade::api::resource_view_type::texture_2d_multisample_array || desc.type == reshade::api::resource_view_type::texture_cube || desc.type == reshade::api::resource_view_type::texture_cube_array))
