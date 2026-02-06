@@ -15,8 +15,14 @@ namespace ACES
     static const float LogLinearGrey = 0.18;
     // This defines what an input matching the "linear grey" parameter will end up at in log space
     static const float LogGrey = 444.0 / 1023.0;
-    // The original min log encoded value
-    static const float LogLinearZeroOffset = 0.0; // exp2((0.0 - LogGrey) * LogLinearRange) * LogLinearGrey;
+    
+    float3 LogToLinear_Internal(float3 LogColor)
+    {
+        return exp2((LogColor - LogGrey) * LogLinearRange) * LogLinearGrey;
+    }
+    
+    // The min log encoded value
+    static const float LogLinearZeroOffset = LogToLinear_Internal(0.0);
     
     float3 LinearToLog(float3 LinearColor)
     {
@@ -27,8 +33,6 @@ namespace ACES
     }
     float3 LogToLinear(float3 LogColor)
     {
-        float3 LinearColor = exp2((LogColor - LogGrey) * LogLinearRange) * LogLinearGrey;
-        LinearColor -= LogLinearZeroOffset; // Map 0 back to "LogLinearZeroOffset", there shouldn't be anything below it.
-        return LinearColor;
+        return LogToLinear_Internal(LogColor) - LogLinearZeroOffset; // Map 0 back to "LogLinearZeroOffset", there shouldn't be anything below it.
     }
 }
