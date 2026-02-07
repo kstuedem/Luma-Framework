@@ -48,7 +48,7 @@ struct GameDeviceDataPersona5 final : public GameDeviceData
 
    // resources used to identify the deferred context used for scene drawing
    com_ptr<ID3D11CommandList> remainder_command_list;
-   std::atomic<ID3D11DeviceContext*> draw_device_context;
+   std::atomic<ID3D11DeviceContext*> draw_device_context = nullptr;
 
    // textures we got from the game
    com_ptr<ID3D11Texture2D> source_color;
@@ -81,7 +81,7 @@ struct GameDeviceDataPersona5 final : public GameDeviceData
    std::unordered_map<uint32_t, float4x4> prev_local_to_view_lookup;
    std::unordered_map<uint32_t, float4x4> local_to_view_lookup;
    std::unordered_map<ID3D11Buffer*, std::array<uint8_t, 7168>> cbuffer_cache;
-   std::atomic<ID3D11Buffer*> cb_transform;
+   std::atomic<ID3D11Buffer*> cb_transform = nullptr;
 #endif // ENABLE_SR
    com_ptr<ID3D11Buffer> scratch_constant_buffer;
    com_ptr<ID3D11UnorderedAccessView> scratch_constant_buffer_uav;
