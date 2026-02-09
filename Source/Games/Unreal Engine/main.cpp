@@ -1467,7 +1467,7 @@ public:
          const auto prev_texture_mip_lod_bias_offset = device_data.texture_mip_lod_bias_offset;
          if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed /*&& device_data.taa_detected*/)
          {
-            device_data.texture_mip_lod_bias_offset = std::log2(device_data.render_resolution.y / device_data.output_resolution.y) - 1.f; // This results in -1 at output res
+            device_data.texture_mip_lod_bias_offset = SR::GetMipLODBias(device_data.render_resolution.y, device_data.output_resolution.y); // This results in -1 at output res
          }
          else
          {
@@ -1567,7 +1567,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;
          swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
          texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
-         enable_automatic_indirect_texture_format_upgrades = true;
+         enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
 
 #if 0 // Not needed as it's done automatically now
          // TODO: automatically upgrade all textures that sample the tonemap LUT, and all textures in between tonemapping and the swapchain final write

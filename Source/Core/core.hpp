@@ -245,7 +245,7 @@ namespace
 #endif
 #if DEVELOPMENT
    bool compile_clear_all_shaders = false; // If true, even shaders that aren't used by the current mod will be compiled, for a test
-   bool trace_show_command_list_info = true;
+   bool trace_show_command_list_info = false;
    bool trace_ignore_vertex_shaders = true;
    bool trace_ignore_buffer_writes = true;
    bool trace_ignore_bindings = true;
@@ -308,6 +308,19 @@ namespace
          AllowedDisabled,
          AllowedEnabled
       };
+      enum class ChainTextureFormatUpgradesType : uint
+      {
+         None,
+         // Direct "copies" of the texture, like: CopyResource, CopySubresourceRegion, ResolveSubresource
+         DirectDependencies,
+         // Also indirect dependencies of the texture, like a SRV or UAV being read in a pixel or compute shader
+         DirectAndIndirectDependencies
+      };
+      const char* chain_texture_format_upgrades_type_strings[3] = {
+          "None",
+          "Direct Dependencies",
+          "Direct and Indirect Dependencies",
+      };
       enum class SwapchainUpgradeType : uint8_t
       {
          // keep the original one, SDR or whatnot
@@ -350,15 +363,17 @@ namespace
       // Global texture format upgrades setting. Required by all other settings below.
       // Only swap between allowed enabled/disabled after init
       TextureFormatUpgradesType texture_format_upgrades_type = TextureFormatUpgradesType::None;
-      // Whether texture upgrades are done directly on the original resource, or on an upgraded mirrored version of it that we keep separately and live replace when the original resource is referenced.
-      // Indirect upgrades might be safer, and can be made more selectively, to avoid upgrading random textures, though they also keep the original texture so memory usage might go up.
-      // This will fail to replace references to resources if the game had DLSS/Streamline calls.
+      // Whether texture upgrades (the ones that happen on resource creation) are done directly on the original resource, or on an upgraded mirrored version of it that we keep separately and live replace when the original resource is referenced.
+      // Indirect upgrades might be safer, and can be made more selective, to avoid upgrading random textures, though they also keep the original texture so memory usage goes up.
+      // Note: indirect upgrades will fail to replace references to resources if the game had DLSS/Streamline calls, as we can't intercept their calls to DX (at least in some cases?).
       // These are sometimes referred to as: indirect, mirrored, proxy, redirected, cloned, ...
       // See "FindOrCreateIndirectUpgradedResource()" for the main functionality.
       bool enable_indirect_texture_format_upgrades = false;
       // Automatically upgrade all textures that are used as target of an indirect upgraded resource, and their views.
       // Indirect texture mirrors might still be automatically created if "texture_format_upgrades_type" is enabled, in case the game tried to copy an upgraded resource into an incompatible one that wasn't upgraded etc.
-      bool enable_automatic_indirect_texture_format_upgrades = false;
+      // This can work even without "enable_indirect_texture_format_upgrades", in case we upgraded textures through "auto_texture_format_upgrade_shader_hashes", or in case a texture wasn't a render target but was used as copy target of one.
+      // It's generally suggested to true if "enable_indirect_texture_format_upgrades" is enabled, unless you are use it works fine without and want to maximize performance.
+      ChainTextureFormatUpgradesType enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::None;
       // Allows to temporarily ignore indirectly upgraded textures
       // In publishing mode, there's no need to ever forcefully ignore the indirectly upgraded textures,
       // given that the settings can't change live, hence they are not created if they are not enabled in the first place.
@@ -428,7 +443,7 @@ namespace
       // First pair value is the RTVs indexes to upgrade, the second one the UAVs (whether it's a pixel or compute shader).
       // This is meant to be used if "enable_indirect_texture_format_upgrades" is off, or if very specific custom upgrades are needed.
       // This assumes that when the upgraded texture is created (it could be at any time, if the target shader doesn't always run), the original texture values aren't relevant, because they won't be preserved.
-      // Currently requires "enable_automatic_indirect_texture_format_upgrades" to work, otherwise other views from the late upgraded textures don't ever get mirrored.
+      // Requires "enable_chain_indirect_texture_format_upgrades" to work, otherwise views from the new indirect upgraded textures don't ever get mirrored.
       std::unordered_map<uint32_t, std::pair<std::vector<uint8_t>, std::vector<uint8_t>>> auto_texture_format_upgrade_shader_hashes;
 
       //
@@ -4291,12 +4306,12 @@ namespace
             bool aspect_ratio_filter = source_desc.type == reshade::api::resource_type::texture_2d && !is_2x_square && !is_1x_square && target_aspect_ratio >= (min_aspect_ratio - FLT_EPSILON) && target_aspect_ratio <= (max_aspect_ratio + FLT_EPSILON); // Note: we don't check the aspect ratio on the depth, we only do it on 2D textures. We also ignore 1x1 and 2x2 for extra safety
             bool size_filter = source_desc.texture.width == target_desc.texture.width && source_desc.texture.height == target_desc.texture.height && source_desc.texture.depth_or_layers == target_desc.texture.depth_or_layers;
             size_filter |= aspect_ratio_filter;
-            size_filter |= source_desc.type == reshade::api::resource_type::texture_2d && target_desc.texture.width == uint(device_data.output_resolution.x + 0.5) && target_desc.texture.height == uint(device_data.output_resolution.y + 0.5); // Force upgrade if it's equal to the swapchain resolution, this pass could be one that converts from a constrained to a fullscreen aspect ratio
+            //size_filter |= source_desc.type == reshade::api::resource_type::texture_2d && target_desc.texture.width == uint(device_data.output_resolution.x + 0.5) && target_desc.texture.height == uint(device_data.output_resolution.y + 0.5); // Force upgrade if it's equal to the swapchain resolution, this pass could be one that converts from a constrained to a fullscreen aspect ratio
 
             // Avoid upgrading textures that don't have the same number of channels (unless they'd now have more!), we wouldn't want to automatically turn 1 channel to 4 channel textures.
             // Also prevent upgrades if the size isn't compatible (aspect ratio matching).
             // And don't upgrade int formats for now, they could only cause troubles.
-            // See "enable_automatic_indirect_texture_format_upgrades" for more.
+            // See "enable_chain_indirect_texture_format_upgrades" for more.
             needs_upgraded_resource = !AreFormatsCopyCompatible(DXGI_FORMAT(source_desc.texture.format), DXGI_FORMAT(target_desc.texture.format))
                && IsRGBAFormat(DXGI_FORMAT(source_desc.texture.format), true) == IsRGBAFormat(DXGI_FORMAT(target_desc.texture.format), true)
                && !IsIntFormat(DXGI_FORMAT(target_desc.texture.format))
@@ -4429,9 +4444,9 @@ namespace
 
          for (uint32_t i = 0; i < count; i++)
          {
-            any_replaced |= FindOrCreateIndirectUpgradedResourceView(cmd_list->get_device(), rtvs[i].handle, replaced_rtvs[i].handle, device_data, enable_automatic_indirect_texture_format_upgrades, reshade::api::resource_usage::render_target, lock_device_read);
+            any_replaced |= FindOrCreateIndirectUpgradedResourceView(cmd_list->get_device(), rtvs[i].handle, replaced_rtvs[i].handle, device_data, enable_chain_indirect_texture_format_upgrades >= ChainTextureFormatUpgradesType::DirectDependencies, reshade::api::resource_usage::render_target, lock_device_read);
          }
-         any_replaced |= FindOrCreateIndirectUpgradedResourceView(cmd_list->get_device(), dsv.handle, dsv.handle, device_data, enable_automatic_indirect_texture_format_upgrades, reshade::api::resource_usage::depth_stencil, lock_device_read); // Usually not needed but won't hurt
+         any_replaced |= FindOrCreateIndirectUpgradedResourceView(cmd_list->get_device(), dsv.handle, dsv.handle, device_data, enable_chain_indirect_texture_format_upgrades >= ChainTextureFormatUpgradesType::DirectDependencies, reshade::api::resource_usage::depth_stencil, lock_device_read); // Usually not needed but won't hurt
       }
 
       if (any_replaced)
@@ -5537,7 +5552,7 @@ namespace
 
       bool force_indirect_texture_format_upgrades = false;
       // If any of our SRVs or UAVs is upgraded, also upgrade our current RTVs/UAVs
-      if (enable_automatic_indirect_texture_format_upgrades) // TODO: this branch could be a separate (additional) setting!
+      if (enable_chain_indirect_texture_format_upgrades >= ChainTextureFormatUpgradesType::DirectAndIndirectDependencies)
       {
          if (is_dispatch)
          {
@@ -6947,15 +6962,14 @@ namespace
       const bool is_rt_or_ua = (desc.usage & (reshade::api::resource_usage::render_target | reshade::api::resource_usage::unordered_access)) != 0;
       // Convoluted check to test if the resource is "D3D11_USAGE_DEFAULT" (the only usage type that can be both used as SRV, and be the target of a CopyResource(), otherwise we'd never need to upgrade them).
       // We also check the initial data for extra safety, in case this was a "static" content texture that accidentally wasn't created as immutable.
+      // This is needed by "Thumper", and possibly "Watch Dogs 2".
       const bool is_writable_sr = (desc.usage & reshade::api::resource_usage::shader_resource) != 0 && desc.heap == reshade::api::memory_heap::gpu_only && !has_initial_data && (desc.flags & reshade::api::resource_flags::immutable) == 0;
 
       const bool is_depth = (desc.usage & reshade::api::resource_usage::depth_stencil) != 0;
 
-      bool enable_preventive_automatic_indirect_texture_format_upgrades = enable_automatic_indirect_texture_format_upgrades && false; // TODO: add a new flag for this, in can often break games
-#if GAME_THUMPER || GAME_WATCH_DOGS_2 // It's needed there?
-      enable_preventive_automatic_indirect_texture_format_upgrades = enable_automatic_indirect_texture_format_upgrades;
-#endif
-      if ((!(is_rt_or_ua || (enable_automatic_indirect_texture_format_upgrades ? is_writable_sr : false)) || !texture_upgrade_formats.contains(desc.texture.format)) && (!is_depth || !texture_depth_upgrade_formats.contains(desc.texture.format)))
+      if ((!(is_rt_or_ua || ((enable_chain_indirect_texture_format_upgrades >= ChainTextureFormatUpgradesType::DirectDependencies) ? is_writable_sr : false))
+               || !texture_upgrade_formats.contains(desc.texture.format))
+            && (!is_depth || !texture_depth_upgrade_formats.contains(desc.texture.format)))
       {
          return std::nullopt;
       }
@@ -7738,11 +7752,11 @@ namespace
             {
                reshade::api::resource original_resource = rvs[i].handle != 0 ? cmd_list->get_device()->get_resource_from_view({ rvs[i].handle }) : reshade::api::resource{0}; // TODO: fix this, we shouldn't call it due to "lock_device_read"
 
-               bool replaced = FindOrCreateIndirectUpgradedResourceView(cmd_list->get_device(), rvs[i].handle, rvs[i].handle, device_data, enable_automatic_indirect_texture_format_upgrades, resource_usage, lock_device_read);
+               bool replaced = FindOrCreateIndirectUpgradedResourceView(cmd_list->get_device(), rvs[i].handle, rvs[i].handle, device_data, enable_chain_indirect_texture_format_upgrades >= ChainTextureFormatUpgradesType::DirectDependencies, resource_usage, lock_device_read);
                any_replaced |= replaced;
 
                // Skip doing all the stuff below if it's not necessary
-               if (!enable_automatic_indirect_texture_format_upgrades || original_resource == 0)
+               if (enable_chain_indirect_texture_format_upgrades < ChainTextureFormatUpgradesType::DirectAndIndirectDependencies || original_resource == 0)
                   continue;
 
                bool upgraded = replaced;
@@ -7780,7 +7794,7 @@ namespace
             }
          }
 
-         // Only needed with "enable_automatic_indirect_texture_format_upgrades".
+         // Only needed with "enable_chain_indirect_texture_format_upgrades".
          // Make sure we allow the list to be cleared if any were upgraded and they've been de-upgraded above!
          if ((stages & reshade::api::shader_stage::compute) != 0)
          {
@@ -8736,7 +8750,7 @@ namespace
             // Note: there a tiny chance the source is not an upgraded texture while the target one is, that's handled with a pixel shader copy below
             any_replaced |= FindOrCreateIndirectUpgradedResource(cmd_list->get_device(), source.handle, source.handle, source.handle, device_data, false, reshade::api::resource_usage::copy_source, lock_device_read);
             // Don't ever allow creating new resources if "texture_format_upgrades_type" isn't enabled, we might end up missing its destruction and causing memory leaks
-            any_replaced |= FindOrCreateIndirectUpgradedResource(cmd_list->get_device(), source.handle, dest.handle, dest.handle, device_data, texture_format_upgrades_type == TextureFormatUpgradesType::AllowedEnabled && enable_automatic_indirect_texture_format_upgrades, reshade::api::resource_usage::copy_dest, lock_device_read, false);
+            any_replaced |= FindOrCreateIndirectUpgradedResource(cmd_list->get_device(), source.handle, dest.handle, dest.handle, device_data, texture_format_upgrades_type == TextureFormatUpgradesType::AllowedEnabled && enable_chain_indirect_texture_format_upgrades >= ChainTextureFormatUpgradesType::DirectDependencies, reshade::api::resource_usage::copy_dest, lock_device_read, false);
          }
 
          if (any_replaced)
@@ -8776,7 +8790,7 @@ namespace
             std::shared_lock lock_device_read(device_data.mutex);
 
             any_replaced |= FindOrCreateIndirectUpgradedResource(cmd_list->get_device(), source.handle, source.handle, source.handle, device_data, false, reshade::api::resource_usage::copy_source, lock_device_read);
-            any_replaced |= FindOrCreateIndirectUpgradedResource(cmd_list->get_device(), source.handle, dest.handle, dest.handle, device_data, texture_format_upgrades_type == TextureFormatUpgradesType::AllowedEnabled && enable_automatic_indirect_texture_format_upgrades, reshade::api::resource_usage::copy_dest, lock_device_read, false);
+            any_replaced |= FindOrCreateIndirectUpgradedResource(cmd_list->get_device(), source.handle, dest.handle, dest.handle, device_data, texture_format_upgrades_type == TextureFormatUpgradesType::AllowedEnabled && enable_chain_indirect_texture_format_upgrades >= ChainTextureFormatUpgradesType::DirectDependencies, reshade::api::resource_usage::copy_dest, lock_device_read, false);
             // TODO: upgrade the "cmd_list_data.ps_srvs_state" state if any resources are upgraded here, they could also be bound as SRV/UAV already.
          }
 
@@ -8838,7 +8852,7 @@ namespace
             std::shared_lock lock_device_read(device_data.mutex);
 
             any_replaced |= FindOrCreateIndirectUpgradedResource(cmd_list->get_device(), source.handle, source.handle, source.handle, device_data, false, reshade::api::resource_usage::resolve_source, lock_device_read);
-            any_replaced |= FindOrCreateIndirectUpgradedResource(cmd_list->get_device(), source.handle, dest.handle, dest.handle, device_data, texture_format_upgrades_type == TextureFormatUpgradesType::AllowedEnabled && enable_automatic_indirect_texture_format_upgrades, reshade::api::resource_usage::resolve_dest, lock_device_read, false);
+            any_replaced |= FindOrCreateIndirectUpgradedResource(cmd_list->get_device(), source.handle, dest.handle, dest.handle, device_data, texture_format_upgrades_type == TextureFormatUpgradesType::AllowedEnabled && enable_chain_indirect_texture_format_upgrades >= ChainTextureFormatUpgradesType::DirectDependencies, reshade::api::resource_usage::resolve_dest, lock_device_read, false);
          }
 
          if (any_replaced)
@@ -9762,6 +9776,7 @@ namespace
                            }
 
                            name << std::setfill('0');
+                           bool written_any_text = false;
 
                            if (trace_show_command_list_info)
                            {
@@ -9769,6 +9784,8 @@ namespace
                               name << std::setw(3) << index << std::setw(0); // Fill up 3 slots for the index so the text is aligned
 
                               name << command_list_info;
+
+                              written_any_text = true;
                            }
 
                            const char* sm = nullptr;
@@ -9803,9 +9820,13 @@ namespace
                               sm = "XS";
                            }
 
+                           // There should always be at least one
                            for (auto shader_hash : pipeline->shader_hashes)
                            {
-                              name << " - " << sm << " " << PRINT_CRC32(shader_hash);
+                              if (written_any_text)
+                                 name << " - ";
+                              name << sm << " " << PRINT_CRC32(shader_hash);
+                              written_any_text = true;
                            }
 
                            // DX11 specific code
@@ -9919,9 +9940,12 @@ namespace
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::CopyResource)
                         {
                            if (trace_show_command_list_info)
+                           {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
-                           name << " - Copy Resource";
+                              name << " - ";
+                           }
+                           name << "Copy Resource";
                            text_color = IM_COL32(255, 105, 0, 255); // Orange
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::BindPipeline)
@@ -9929,9 +9953,12 @@ namespace
                            if (trace_ignore_bindings) continue;
                            
                            if (trace_show_command_list_info)
+                           {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
-                           name << " - Bind Pipeline";
+                              name << " - ";
+                           }
+                           name << "Bind Pipeline";
                            text_color = IM_COL32(30, 200, 10, 255); // Some green
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::BindResource)
@@ -9939,80 +9966,108 @@ namespace
                            if (trace_ignore_bindings) continue;
                            
                            if (trace_show_command_list_info)
+                           {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
-                           name << " - Bind Resource";
+                              name << " - ";
+                           }
+                           name << "Bind Resource";
                            text_color = IM_COL32(30, 200, 10, 255); // Some green
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::CPURead)
                         {
                            if (trace_show_command_list_info)
+                           {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
-                           name << " - Resource CPU Read";
+                              name << " - ";
+                           }
+                           name << "Resource CPU Read";
                            text_color = IM_COL32(255, 40, 0, 255); // Bright Red
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::CPUWrite)
                         {
                            if (trace_show_command_list_info)
+                           {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
+                              name << " - ";
+                           }
+
                            // Hacky resource type name check
                            if (trace_ignore_buffer_writes && draw_call_data.rt_type_name[0] == "Buffer")
                            {
                               continue;
                            }
 
-                           name << " - Resource CPU Write";
+                           name << "Resource CPU Write";
 
                            text_color = IM_COL32(255, 105, 0, 255); // Orange
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::ClearResource)
                         {
                            if (trace_show_command_list_info)
+                           {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
-                           name << " - Clear Resource";
+                              name << " - ";
+                           }
+                           name << "Clear Resource";
                            text_color = IM_COL32(255, 105, 0, 255); // Orange
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::CreateCommandList)
                         {
                            if (trace_show_command_list_info)
+                           {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
-                           name << " - Create Command List";
+                              name << " - ";
+                           }
+                           name << "Create Command List";
                            text_color = IM_COL32(50, 80, 190, 255); // Some Blue
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::AppendCommandList)
                         {
                            if (trace_show_command_list_info)
+                           {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
-                           name << " - Append Command List";
+                              name << " - ";
+                           }
+                           name << "Append Command List";
                            text_color = IM_COL32(50, 80, 190, 255); // Some Blue
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::ResetCommmandList)
                         {
                            if (trace_show_command_list_info)
+                           {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
-                           name << " - Reset Command List";
+                              name << " - ";
+                           }
+                           name << "Reset Command List";
                            text_color = IM_COL32(50, 80, 190, 255); // Some Blue
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::FlushCommandList)
                         {
                            if (trace_show_command_list_info)
+                           {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
-                           name << " - Flush Command List";
+                              name << " - ";
+                           }
+                           name << "Flush Command List";
                            text_color = IM_COL32(50, 80, 190, 255); // Some Blue
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Present)
                         {
                            if (trace_show_command_list_info)
+                           {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
-                           name << " - Present";
+                              name << " - ";
+                           }
+                           name << "Present";
                            text_color = IM_COL32(50, 80, 190, 255); // Some Blue
 
                            // Highlight the resource on the swapchain too, given that "Present" traces aren't tracked the same way
@@ -10035,9 +10090,12 @@ namespace
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Custom)
                         {
                            if (trace_show_command_list_info)
+                           {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
-                           name << " - " << draw_call_data.custom_name;
+                              name << " - ";
+                           }
+                           name << draw_call_data.custom_name;
                            text_color = IM_COL32(70, 130, 180, 255); // Steel Blue
                         }
                         else
@@ -12573,6 +12631,7 @@ namespace
 #endif
                }
                ImGui::BeginDisabled(!hdr_supported_display);
+               static_assert(sizeof(display_mode) == sizeof(int));
                if (ImGui::SliderInt("Display Mode", reinterpret_cast<int*>(&display_mode), 0, display_mode_max, display_mode_preset_strings[(size_t)display_mode], ImGuiSliderFlags_NoInput))
                {
                   ChangeDisplayMode(display_mode, true, device_data.GetMainNativeSwapchain().get());
@@ -13458,7 +13517,8 @@ namespace
                   //if (texture_format_upgrades_type == TextureFormatUpgradesType::AllowedEnabled) // TODO: hide only the ones that would be restricted by this being disabled, I think most would at least continue to work (at least without clearing what they previously upgraded)
                   {
                      ImGui::Checkbox("Enable Indirect Texture Format Upgrades", &enable_indirect_texture_format_upgrades);
-                     ImGui::Checkbox("Enable Automatic Indirect Texture Format Upgrades", &enable_automatic_indirect_texture_format_upgrades);
+                     static_assert(sizeof(enable_chain_indirect_texture_format_upgrades) == sizeof(int));
+                     ImGui::SliderInt("Chain Indirect Texture Format Upgrades Types", reinterpret_cast<int*>(&enable_chain_indirect_texture_format_upgrades), 0, (int)ChainTextureFormatUpgradesType::DirectAndIndirectDependencies, chain_texture_format_upgrades_type_strings[(size_t)enable_chain_indirect_texture_format_upgrades], ImGuiSliderFlags_NoInput);
                      ImGui::Checkbox("Ignore Indirect Upgraded Textures", &ignore_indirect_upgraded_textures);
                      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                      {
