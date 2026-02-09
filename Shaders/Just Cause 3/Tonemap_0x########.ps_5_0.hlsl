@@ -445,7 +445,7 @@ void main(
 
   float3 blurredScene = BlurredSceneTexture.Sample(BlurredSceneTexture_s, uv).xyz;
   float3 bloomedScene = BloomTexture.Sample(BloomTexture_s, uv).xyz;
-  float3 secondaryBloomedScene = SecondaryBloomTexture.Sample(SecondaryBloomTexture_s, uv).xyz; // TODO: expose bloom scale user setting? It's quite strong...
+  float3 secondaryBloomedScene = SecondaryBloomTexture.Sample(SecondaryBloomTexture_s, uv).xyz;
 #if 0 // Mirror lens dirt around its aspect ratio, so it doesn't stretch in UW
     float2 lensDirtSize;
     LensDirtTexture.GetDimensions(lensDirtSize.x, lensDirtSize.y); // This looked non stretched in its native aspect ratio
