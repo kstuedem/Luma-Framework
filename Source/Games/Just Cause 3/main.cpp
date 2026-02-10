@@ -2,7 +2,7 @@
 
 // TODO: move SR to run before the final screen space stuff starts happening (e.g. heat distortion, bloom, blur, tonemap, etc)! Alternatively, dejitter the image before calculating bloom and dof etc?
 #define ENABLE_NGX 1
-// TODO: fix FSR being darker...? It's probably because of the wrong depth/fov params
+// FSR is disabled in publishing builds, JC3 has no proper motion vectors on vegetation nor skinned meshes, hence it looks terrible on them (DLSS looks fine with them!).
 #define ENABLE_FIDELITY_SK ((DEVELOPMENT || TEST) ? 1 : 0)
 #define AUTO_ENABLE_SR 1
 
@@ -207,6 +207,33 @@ public:
       GetShaderDefineData(TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL_HASH).SetDefaultValue('1');
 
       last_frame_time = std::chrono::high_resolution_clock::now();
+   }
+   
+   void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
+   {
+      D3D11_TEXTURE2D_DESC exposure_texture_desc; // DLSS fails if we pass in a 1D texture so we have to make a 2D one
+      exposure_texture_desc.Width = 1;
+      exposure_texture_desc.Height = 1;
+      exposure_texture_desc.MipLevels = 1;
+      exposure_texture_desc.ArraySize = 1;
+      exposure_texture_desc.Format = DXGI_FORMAT::DXGI_FORMAT_R32_FLOAT; // FP32 just so it's easier to initialize data for it
+      exposure_texture_desc.SampleDesc.Count = 1;
+      exposure_texture_desc.SampleDesc.Quality = 0;
+      exposure_texture_desc.Usage = D3D11_USAGE_IMMUTABLE;
+      exposure_texture_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+      exposure_texture_desc.CPUAccessFlags = 0;
+      exposure_texture_desc.MiscFlags = 0;
+      
+      // It's best to force an exposure of 1 given that DLSS runs after the auto exposure is applied (in tonemapping).
+      // Theoretically knowing the average exposure of the frame would still be beneficial to it (somehow) so maybe we could simply let the auto exposure in,
+      D3D11_SUBRESOURCE_DATA exposure_texture_data;
+      exposure_texture_data.pSysMem = &device_data.sr_exposure_texture_value; // This needs to be "static" data in case the texture initialization was somehow delayed and read the data after the stack destroyed it
+      exposure_texture_data.SysMemPitch = 32;
+      exposure_texture_data.SysMemSlicePitch = 32;
+      
+      device_data.sr_exposure = nullptr; // Make sure we discard the previous one
+      HRESULT hr = native_device->CreateTexture2D(&exposure_texture_desc, &exposure_texture_data, &device_data.sr_exposure);
+      assert(SUCCEEDED(hr));
    }
 
    // Add a saturate on materials/gbuffers
@@ -664,8 +691,8 @@ public:
                settings_data.render_height = unsigned int(device_data.render_resolution.y + 0.5);
                settings_data.hdr = true; // At this point we are linear and "HDR" though the image is partially tonemapped if we are after SMAA
                settings_data.inverted_depth = true;
-               settings_data.mvs_jittered = false; // See shader 0xA1037803, they were partially jittered (with the current frame jitter but not the previous one, so we fixed that up and completley removed jitters, so it also makes motion blur independent from them)
-               settings_data.auto_exposure = true; // TODO: Exp is 1 given it's all after post processing, but actually constantly changes all the times, given it's calculated after DLSS but applied b4... We could re-use the LateAutoExposure shader pass mips to calculate the avg luminance though!
+               settings_data.mvs_jittered = false; // See shader 0xA1037803, they were partially jittered (with the current frame jitter but not the previous one, so we fixed that up and completely removed jitters, so it also makes motion blur independent from them)
+               settings_data.auto_exposure = device_data.sr_type != SR::Type::FSR; // Exp is ~1 given it's all after post processing (and the game's auto exposure). FSR breaks with auto exposure in this game (it heavily clips highlights). DLSS looks fine with it.
                // MVs in UV space, so we need to scale by the render resolution to transform to pixel space
                settings_data.mvs_x_scale = -device_data.render_resolution.x;
                settings_data.mvs_y_scale = -device_data.render_resolution.y;
@@ -745,6 +772,8 @@ public:
                   draw_data.vert_fov = 0.60894538; // Would be "atan(1.f / projection_matrix.m11) * 2.0", however we don't have the proj matrix in any cbuffer in this game, it's only in the CPU. No current SR implementation uses this anyway. Seems like the default is 34.89 degs.
                   draw_data.frame_index = cb_luma_global_settings.FrameIndex;
                   draw_data.time_delta = 1.0 / 60.0;
+                  if (!settings_data.auto_exposure)
+                     draw_data.exposure = device_data.sr_exposure.get();
 
                   bool dlss_succeeded = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context, draw_data);
                   if (dlss_succeeded)
