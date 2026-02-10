@@ -692,6 +692,11 @@ public:
                native_device_context->PSSetShaderResources(lut_srv_index, 1, &(ID3D11ShaderResourceView* const&)(game_device_data.tonemap_lut_texture_srv.get()));
             }
 
+            // Only do indirect upgrades after tonemapping to avoid any risk for false positives that could lead to graphical glitches or crashes.
+            // UE uses one command list in DX11 so it's not a problem.
+            cmd_list_data.enable_chain_indirect_texture_format_upgrades = (uint)enable_chain_indirect_texture_format_upgrades;
+            ASSERT_ONCE(cmd_list_data.is_primary);
+
             return DrawOrDispatchOverrideType::None;
          }
       }
@@ -1128,6 +1133,13 @@ public:
       game_device_data.camera_cut = !device_data.taa_detected && !device_data.has_drawn_sr && !device_data.force_reset_sr;
       device_data.has_drawn_sr = false;
       game_device_data.jitter = {0.0f, 0.0f};
+
+      if (thread_local_cmd_list)
+      {
+         CommandListData& cmd_list_data = *thread_local_cmd_list->get_private_data<CommandListData>();
+         cmd_list_data.enable_chain_indirect_texture_format_upgrades = (uint)ChainTextureFormatUpgradesType::DirectDependencies;
+         ASSERT_ONCE(cmd_list_data.is_primary);
+      }
    }
 
    void CleanExtraSRResources(DeviceData& device_data) override
@@ -1567,7 +1579,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;
          swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
          texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
-         enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
+         enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectAndIndirectDependencies;
 
 #if 0 // Not needed as it's done automatically now
          // TODO: automatically upgrade all textures that sample the tonemap LUT, and all textures in between tonemapping and the swapchain final write

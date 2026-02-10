@@ -742,7 +742,7 @@ public:
                      std::swap(draw_data.near_plane, draw_data.far_plane);
                   }
 #endif
-                  draw_data.vert_fov = 1.0; // Would be "atan(1.f / projection_matrix.m11) * 2.0", however we don't have the proj matrix in any cbuffer in this game, it's only in the CPU. No current SR implementation uses this anyway.
+                  draw_data.vert_fov = 0.60894538; // Would be "atan(1.f / projection_matrix.m11) * 2.0", however we don't have the proj matrix in any cbuffer in this game, it's only in the CPU. No current SR implementation uses this anyway. Seems like the default is 34.89 degs.
                   draw_data.frame_index = cb_luma_global_settings.FrameIndex;
                   draw_data.time_delta = 1.0 / 60.0;
 

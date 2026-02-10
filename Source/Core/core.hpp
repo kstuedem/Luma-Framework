@@ -7,7 +7,7 @@
 #endif // !NDEBUG
 
 // Enable when you are developing shaders or code (not debugging, there's "NDEBUG" for that).
-// This brings out the "devkit", allowing you to trace draw calls and a lot more stuff.
+// This brings out the development tools, allowing you to trace draw calls and a lot more stuff.
 #ifndef DEVELOPMENT
 #define DEVELOPMENT 0
 #endif // DEVELOPMENT
@@ -4794,6 +4794,8 @@ namespace
       }
       secondary_cmd_list_data.force_cb_luma_instance_data_dirty = true;
 
+      cmd_list_data.enable_chain_indirect_texture_format_upgrades = (uint)enable_chain_indirect_texture_format_upgrades;
+
 #if DEVELOPMENT
       if (is_finish_command_list)
       {
@@ -5552,7 +5554,7 @@ namespace
 
       bool force_indirect_texture_format_upgrades = false;
       // If any of our SRVs or UAVs is upgraded, also upgrade our current RTVs/UAVs
-      if (enable_chain_indirect_texture_format_upgrades >= ChainTextureFormatUpgradesType::DirectAndIndirectDependencies)
+      if ((ChainTextureFormatUpgradesType)cmd_list_data.enable_chain_indirect_texture_format_upgrades >= ChainTextureFormatUpgradesType::DirectAndIndirectDependencies)
       {
          if (is_dispatch)
          {

@@ -211,6 +211,9 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
 
    std::atomic<bool> write_finished{false};
 
+   // Only used when checking for "ChainTextureFormatUpgradesType::DirectAndIndirectDependencies", as it might be disabled at runtime.
+   uint enable_chain_indirect_texture_format_upgrades = 0; // TODO: ChainTextureFormatUpgradesType
+
    reshade::api::pipeline pipeline_state_original_compute_shader = reshade::api::pipeline(0);
    reshade::api::pipeline pipeline_state_original_vertex_shader = reshade::api::pipeline(0);
    reshade::api::pipeline pipeline_state_original_pixel_shader = reshade::api::pipeline(0);
@@ -270,6 +273,8 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
 #if DEVELOPMENT
    std::shared_mutex mutex_trace;
    std::vector<TraceDrawCallData> trace_draw_calls_data;
+
+   void AddGraphicsCaptureCustomDrawCall(const char* name, class ID3D11DeviceContext* native_device_context, class ID3D11Resource* resource = nullptr, class ID3D11View* view = nullptr);
 
    bool requires_join = false;
 
