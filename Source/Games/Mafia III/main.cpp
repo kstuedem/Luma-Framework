@@ -1184,8 +1184,8 @@ public:
       int temporal_frame = cb_luma_global_settings.FrameIndex % phases;
 
       // Note: we add 1 to the temporal frame here to avoid a bias, given that Halton always returns 0 for 0
-      game_device_data.taa_jitters.x = Halton(temporal_frame + 1, 2) - 0.5f;
-      game_device_data.taa_jitters.y = Halton(temporal_frame + 1, 3) - 0.5f;
+      game_device_data.taa_jitters.x = SR::HaltonSequence(temporal_frame, 2);
+      game_device_data.taa_jitters.y = SR::HaltonSequence(temporal_frame, 3);
 
 #if DEVELOPMENT
       //TODOFT: delete
