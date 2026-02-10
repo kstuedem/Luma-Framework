@@ -760,14 +760,12 @@ public:
                   draw_data.jitter_y = frame_jitters.y;
                   draw_data.reset = reset_dlss; // TODO: implement camera cuts too... I don't think the game has them exposed though. Possibly reset DLSS when we pause the game or go into a loading screen.
 
-                  // Extracted from "A1037803" PS cbuffers. Supposedly they are fixed throughout the game. "7BE70E91" might also have them.
+#if 1 // Extracted from proj matrix on the CPU (not 100% if this or the ones below are right)
+                  draw_data.near_plane = 0.1; // 10cm
+                  draw_data.far_plane = 40000.0; // 40km
+#else // Extracted from "A1037803" PS cbuffers. Supposedly they are fixed throughout the game. "7BE70E91" might also have them.
                   draw_data.near_plane = 0.025; // 2.5cm
                   draw_data.far_plane = 10000.0; // 10km
-#if DEVELOPMENT
-                  if (cb_luma_global_settings.DevSettings[1]) // TODO: FSR tests...
-                  {
-                     std::swap(draw_data.near_plane, draw_data.far_plane);
-                  }
 #endif
                   draw_data.vert_fov = 0.60894538; // Would be "atan(1.f / projection_matrix.m11) * 2.0", however we don't have the proj matrix in any cbuffer in this game, it's only in the CPU. No current SR implementation uses this anyway. Seems like the default is 34.89 degs.
                   draw_data.frame_index = cb_luma_global_settings.FrameIndex;
