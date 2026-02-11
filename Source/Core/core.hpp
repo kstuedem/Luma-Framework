@@ -4360,6 +4360,7 @@ namespace
       // Let the upgrades happen above, but ignore the override
       if (ignore_indirect_upgraded_textures)
       {
+         if (out_resource)
          out_resource = in_resource;
          return false;
       }
@@ -4424,6 +4425,7 @@ namespace
       // Let the upgrades happen above, but ignore the override
       if (ignore_indirect_upgraded_textures)
       {
+         if (out_rv)
          out_rv = in_rv;
          return false;
       }
