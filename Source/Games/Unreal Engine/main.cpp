@@ -1134,11 +1134,9 @@ public:
       device_data.has_drawn_sr = false;
       game_device_data.jitter = {0.0f, 0.0f};
 
-      if (thread_local_cmd_list)
+      if (device_data.primary_command_list_data)
       {
-         CommandListData& cmd_list_data = *thread_local_cmd_list->get_private_data<CommandListData>();
-         cmd_list_data.enable_chain_indirect_texture_format_upgrades = (uint)ChainTextureFormatUpgradesType::DirectDependencies;
-         ASSERT_ONCE(cmd_list_data.is_primary);
+         device_data.primary_command_list_data->enable_chain_indirect_texture_format_upgrades = (uint)ChainTextureFormatUpgradesType::DirectDependencies;
       }
    }
 
