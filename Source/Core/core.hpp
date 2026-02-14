@@ -771,7 +771,7 @@ namespace
    // Returns true if any shader or pipeline has been replaced, meaning that the mod will at least do something (this is representative of how most, but not necessarily all, mods work)
    bool IsModActive(const DeviceData& device_data)
    {
-   #if GAME_UNREAL_ENGINE
+   #if GAME_UNREAL_ENGINE || GAME_GRANBLUE_FANTASY_RELINK
       return true;
    #endif
       // Note: we don't check "custom_shaders_enabled" here because we want to simulate the mod still being treated as active in that case
@@ -14566,6 +14566,11 @@ BOOL APIENTRY CoreMain(HMODULE h_module, DWORD fdw_reason, LPVOID lpv_reserved)
 #if (DEVELOPMENT || _DEBUG) && !defined(DISABLE_AUTO_DEBUGGER)
       LaunchDebugger(NAME);
 #endif // DEVELOPMENT
+
+#if TEST
+      // Install an unhandled exception filter that dumps the callstack to a file on crash
+      CrashHandler::Install();
+#endif // TEST
 
       std::filesystem::path file_path = System::GetModulePath(h_module);
       if (file_path.extension() == ".addon" || file_path.extension() == ".addon64")
