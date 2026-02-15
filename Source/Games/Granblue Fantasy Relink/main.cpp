@@ -18,7 +18,7 @@ namespace
    ShaderHashesList shader_hashes_scene_buffer_dispatch; // 0xDA85F5BB - the CS pass with SceneBuffer (cb0)
    const uint32_t Global_buffer_size = 0x3000000;
    const uint32_t CBSceneBuffer_size = sizeof(cbSceneBuffer);
-   // const uint32_t Global_buffer_capture_unmap_index = 10; // 1 = first unmap, 2 = second unmap, etc.
+   const uint32_t Global_buffer_capture_unmap_index = 10; // Secondary copy index (1-based) expected to have correct SceneBuffer data
 
 } // namespace
 
@@ -46,7 +46,8 @@ struct GameDeviceDataGBFR final : public GameDeviceData
    uint64_t global_buffer_map_size = 0;
    std::unique_ptr<uint8_t[]> global_buffer_copy;
    bool has_global_buffer_copy = false;
-   // uint32_t global_buffer_unmap_count_this_frame = 0;
+   uint32_t global_buffer_unmap_count_this_frame = 0;
+   uint32_t global_buffer_unmap_count_prev_frame = 0; // Total unmaps from the previous frame, used to also copy on the last unmap
 
    // Camera data extracted from the projection matrix
    std::atomic<bool> has_camera_data = false;
@@ -244,10 +245,22 @@ public:
       if (game_device_data.global_buffer != buffer)
          return;
 
-      // Check all conditions: right buffer and we have mapped bytes to copy
-      if (game_device_data.global_buffer_map_data != nullptr &&
-          game_device_data.global_buffer_map_size > 0 &&
-          !game_device_data.has_global_buffer_copy)
+      // Copy the buffer at strategic unmap indices to avoid copying every time (48MB memcpy).
+      // - 1st unmap: safety fallback in case fewer unmaps occur than expected
+      // - Nth unmap (Global_buffer_capture_unmap_index): expected correct SceneBuffer data
+      // - Last unmap from prev frame: catches the final write which may be the real one
+      // The last copy wins, so later copies overwrite earlier ones.
+      game_device_data.global_buffer_unmap_count_this_frame++;
+
+      const uint32_t count = game_device_data.global_buffer_unmap_count_this_frame;
+      const uint32_t prev_last = game_device_data.global_buffer_unmap_count_prev_frame;
+      const bool is_first  = (count == 1);
+      const bool is_target = (count == Global_buffer_capture_unmap_index);
+      const bool is_prev_last = (prev_last > 0 && count == prev_last);
+
+      if ((is_first || is_target || is_prev_last) &&
+          game_device_data.global_buffer_map_data != nullptr &&
+          game_device_data.global_buffer_map_size > 0)
       {
          if (game_device_data.global_buffer_copy.get() == nullptr)
          {
@@ -258,11 +271,13 @@ public:
             game_device_data.global_buffer_map_data,
             static_cast<size_t>(game_device_data.global_buffer_map_size));
          game_device_data.has_global_buffer_copy = true;
-
-         game_device_data.global_buffer = nullptr;
-         game_device_data.global_buffer_map_data = nullptr;
-         game_device_data.global_buffer_map_size = 0;
       }
+
+      // Clear map tracking (buffer identity check in the guard above ensures
+      // we only count unmaps of the right buffer).
+      game_device_data.global_buffer = nullptr;
+      game_device_data.global_buffer_map_data = nullptr;
+      game_device_data.global_buffer_map_size = 0;
    }
 
    static void OnExecuteSecondaryCommandList(reshade::api::command_list* cmd_list, reshade::api::command_list* secondary_cmd_list)
@@ -299,6 +314,11 @@ public:
                settings_data.auto_exposure = true; // No exposure texture extraction for now
                settings_data.inverted_depth = false;
                settings_data.mvs_jittered = false; // Granblue MVs are already unjittered
+               // MVs in g_GeometryBuffer03 are in UV space (0-1 range) with forward direction
+               // (current_uv - previous_uv), so we need negative resolution scale to convert
+               // to pixel space with backward direction (DLSS expects positive toward top-left)
+               settings_data.mvs_x_scale = -(float)game_device_data.taa_rt1_desc.Width;
+               settings_data.mvs_y_scale = -(float)game_device_data.taa_rt1_desc.Height;
                settings_data.render_preset = dlss_render_preset;
                sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context.get(), settings_data);
             }
@@ -313,8 +333,11 @@ public:
                draw_data.motion_vectors = game_device_data.sr_motion_vectors.get();
                draw_data.depth_buffer = game_device_data.depth_buffer.get();
                draw_data.pre_exposure = 0.0f;
-               draw_data.jitter_x = 0;
-               draw_data.jitter_y = 0;
+               // Convert NDC jitter to pixel space for DLSS
+               // X: positive NDC = positive screen (right)
+               // Y: positive NDC = up, but DLSS positive Y = down (screen convention), so negate
+               draw_data.jitter_x = game_device_data.jitter.x * 0.5f * (float)game_device_data.taa_rt1_desc.Width;
+               draw_data.jitter_y = game_device_data.jitter.y * -0.5f * (float)game_device_data.taa_rt1_desc.Height;
                draw_data.vert_fov = game_device_data.camera_fov;
                draw_data.far_plane = game_device_data.camera_far;
                draw_data.near_plane = game_device_data.camera_near;
@@ -405,6 +428,8 @@ public:
       }
       device_data.has_drawn_sr = false;
       game_device_data.has_global_buffer_copy = false;
+      game_device_data.global_buffer_unmap_count_prev_frame = game_device_data.global_buffer_unmap_count_this_frame;
+      game_device_data.global_buffer_unmap_count_this_frame = 0;
       game_device_data.remainder_command_list = nullptr;
       game_device_data.draw_device_context = nullptr;
    }
@@ -428,10 +453,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
       // 0xDA85F5BB compute shader that has SceneBuffer with projection matrix and jitter
       shader_hashes_scene_buffer_dispatch.compute_shaders.emplace(std::stoul("DA85F5BB", nullptr, 16));
+#if DEVELOPMENT
+      force_disable_display_composition = false;
+      swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;
+      swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
+      texture_format_upgrades_type = TextureFormatUpgradesType::None;
+#else
       force_disable_display_composition = true;
       swapchain_format_upgrade_type = TextureFormatUpgradesType::None;
       swapchain_upgrade_type = SwapchainUpgradeType::None;
       texture_format_upgrades_type = TextureFormatUpgradesType::None;
+#endif
 
       texture_upgrade_formats = {
          reshade::api::format::r8g8b8a8_unorm,

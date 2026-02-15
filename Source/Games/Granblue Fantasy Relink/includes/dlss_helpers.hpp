@@ -67,7 +67,7 @@ static bool SetupSROutput(
    game_device_data.taa_rt1_desc = out_texture_desc;
 
    // Check if output supports UAV
-   constexpr bool use_native_uav = false; // Force intermediate texture to prevent output corruption
+   constexpr bool use_native_uav = true; // Force intermediate texture to prevent output corruption
    game_device_data.output_supports_uav = use_native_uav && (out_texture_desc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) != 0;
 
    // Get SR instance data for min resolution check
@@ -136,10 +136,12 @@ static void ExtractCameraData(GameDeviceDataGBFR& game_device_data, const void* 
 
    // Extract near and far planes
    // For standard DX projection (looking down +Z or -Z):
-   // m22 = f / (f - n)  or  f / (n - f)
-   // m32 = -n * f / (f - n)  or  n * f / (n - f)
+   // HLSL _m22 = f / (f - n)  or  f / (n - f)
+   // HLSL _m32 = -n * f / (f - n)  or  n * f / (n - f)
+   // Note: HLSL column-major _mRC maps to C++ row-major m(C)(R)
+   //   so HLSL _m22 (diagonal) = proj.m22, HLSL _m32 = proj.m23
    float m22 = proj.m22;
-   float m32 = proj.m32;
+   float m32 = proj.m23;  // HLSL _m32 (column 2, row 3 → C++ row-major index 11)
 
    if (m22 != 0.0f)
    {
@@ -157,8 +159,14 @@ static void ExtractCameraData(GameDeviceDataGBFR& game_device_data, const void* 
       game_device_data.camera_far = std::abs(f);
    }
 
-   // Extract jitter from g_ProjectionOffset (already in projection/clip space)
-   // The projection offset in Granblue is stored in g_ProjectionOffset.xy
-   game_device_data.jitter.x = float_buffer[offsetof(cbSceneBuffer, g_ProjectionOffset.x) / sizeof(float)];
-   game_device_data.jitter.y = float_buffer[offsetof(cbSceneBuffer, g_ProjectionOffset.y) / sizeof(float)];
+   // Extract TAA jitter from the projection matrix.
+   // HLSL column-major layout: g_Proj starts at byte 64 (cb0[4]).
+   //   Column 0 (cb0[4]): _m00, _m10, _m20, _m30
+   //   Column 1 (cb0[5]): _m01, _m11, _m21, _m31
+   // _m20 (jitter X) = cb0[4].z = byte 72 → C++ proj.m02
+   // _m21 (jitter Y) = cb0[5].z = byte 88 → C++ proj.m12
+   // These are the asymmetric frustum offsets, zero without TAA, containing
+   // the sub-pixel NDC jitter when TAA is active. Values should be in ~[-1,1] NDC range.
+   game_device_data.jitter.x = proj.m02;
+   game_device_data.jitter.y = proj.m12;
 }
