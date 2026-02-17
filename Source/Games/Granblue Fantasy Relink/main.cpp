@@ -120,7 +120,7 @@ public:
 
                   ExtractCameraData(game_device_data, cb_data);
                   game_device_data.has_camera_data = true;
-                  
+
                }
             }
          }
@@ -140,7 +140,7 @@ public:
 
          // We need camera data to run SR. On the first frame we won't have it yet
          // since we extract it one frame late (on unmap after caching the buffer).
-         if (!game_device_data.has_global_buffer_copy)
+         if (!game_device_data.has_camera_data)
          {
             device_data.force_reset_sr = true;
             return DrawOrDispatchOverrideType::None;
@@ -242,7 +242,7 @@ public:
 
       ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
 
-      if (game_device_data.global_buffer != buffer)
+      if (game_device_data.global_buffer != buffer || game_device_data.has_camera_data)
          return;
 
       // Copy the buffer at strategic unmap indices to avoid copying every time (48MB memcpy).
@@ -261,12 +261,12 @@ public:
       if ((is_first || is_target || is_prev_last) &&
           game_device_data.global_buffer_map_data != nullptr &&
           game_device_data.global_buffer_map_size > 0)
-      {
-         if (game_device_data.global_buffer_copy.get() == nullptr)
          {
+         if (game_device_data.global_buffer_copy.get() == nullptr)
+            {
             game_device_data.global_buffer_copy = std::make_unique<uint8_t[]>(static_cast<size_t>(game_device_data.global_buffer_map_size));
-         }
-         std::memcpy(
+            }
+            std::memcpy(
             game_device_data.global_buffer_copy.get(),
             game_device_data.global_buffer_map_data,
             static_cast<size_t>(game_device_data.global_buffer_map_size));
@@ -327,6 +327,16 @@ public:
                bool reset_sr = device_data.force_reset_sr || game_device_data.output_changed;
                device_data.force_reset_sr = false;
 
+               float jitter_x = game_device_data.jitter.x * 0.5f * (float)game_device_data.taa_rt1_desc.Width;
+               float jitter_y = game_device_data.jitter.y * -0.5f * (float)game_device_data.taa_rt1_desc.Height;
+               if (fabs(jitter_x) > 0.5f || fabs(jitter_y) > 0.5f)
+               {
+                  // If jitter is unusually large, likely the game changed the projection matrix in a way we didn't expect and our extracted jitter is wrong.
+                  // In this case we reset SR to avoid extreme ghosting from bad motion vectors, and we skip applying jitter deltas to the SR draw data since they are likely wrong.
+                  // reset_sr = true;
+                  jitter_x = 0;
+                  jitter_y = 0;
+               }
                SR::SuperResolutionImpl::DrawData draw_data;
                draw_data.source_color = game_device_data.sr_source_color.get();
                draw_data.output_color = device_data.sr_output_color.get();
@@ -334,10 +344,10 @@ public:
                draw_data.depth_buffer = game_device_data.depth_buffer.get();
                draw_data.pre_exposure = 0.0f;
                // Convert NDC jitter to pixel space for DLSS
-               // X: positive NDC = positive screen (right)
-               // Y: positive NDC = up, but DLSS positive Y = down (screen convention), so negate
-               draw_data.jitter_x = game_device_data.jitter.x * 0.5f * (float)game_device_data.taa_rt1_desc.Width;
-               draw_data.jitter_y = game_device_data.jitter.y * -0.5f * (float)game_device_data.taa_rt1_desc.Height;
+                  // X: positive NDC = positive screen (right)
+                  // Y: positive NDC = up, but DLSS positive Y = down (screen convention), so negate
+               draw_data.jitter_x = jitter_x;
+               draw_data.jitter_y = jitter_y;
                draw_data.vert_fov = game_device_data.camera_fov;
                draw_data.far_plane = game_device_data.camera_far;
                draw_data.near_plane = game_device_data.camera_near;
@@ -428,6 +438,7 @@ public:
       }
       device_data.has_drawn_sr = false;
       game_device_data.has_global_buffer_copy = false;
+      game_device_data.has_camera_data = false;
       game_device_data.global_buffer_unmap_count_prev_frame = game_device_data.global_buffer_unmap_count_this_frame;
       game_device_data.global_buffer_unmap_count_this_frame = 0;
       game_device_data.remainder_command_list = nullptr;
@@ -450,6 +461,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
       // TAA pixel shader hash
       shader_hashes_TAA.pixel_shaders.emplace(std::stoul("478E345C", nullptr, 16));
+      shader_hashes_TAA.pixel_shaders.emplace(std::stoul("E49E117A", nullptr, 16)); // RenoDX compatibility
 
       // 0xDA85F5BB compute shader that has SceneBuffer with projection matrix and jitter
       shader_hashes_scene_buffer_dispatch.compute_shaders.emplace(std::stoul("DA85F5BB", nullptr, 16));
@@ -484,6 +496,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
 #if DEVELOPMENT
       forced_shader_names.emplace(std::stoul("478E345C", nullptr, 16), "TAA");
+      forced_shader_names.emplace(std::stoul("E49E117A", nullptr, 16), "TAA RenoDX");
       forced_shader_names.emplace(std::stoul("DA85F5BB", nullptr, 16), "SceneBuffer_CS");
 #endif
 
