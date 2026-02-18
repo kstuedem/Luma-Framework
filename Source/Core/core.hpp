@@ -14567,11 +14567,6 @@ BOOL APIENTRY CoreMain(HMODULE h_module, DWORD fdw_reason, LPVOID lpv_reserved)
       LaunchDebugger(NAME);
 #endif // DEVELOPMENT
 
-#if TEST
-      // Install an unhandled exception filter that dumps the callstack to a file on crash
-      CrashHandler::Install();
-#endif // TEST
-
       std::filesystem::path file_path = System::GetModulePath(h_module);
       if (file_path.extension() == ".addon" || file_path.extension() == ".addon64")
       {
